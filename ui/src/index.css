@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Neutral, low-chroma surfaces; one accent; status red reserved for failures.
+   Chart series follow the dataviz reference palette (blue, orange). */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #fafaf9;
+  --subtle: #f4f4f3;
+  --hover: #f6f6f5;
+  --border: #ececea;
+  --border-strong: #dcdcd9;
+  --text: #171717;
+  --text-2: #585856;
+  --text-3: #91908c;
+  --accent: #2a78d6;
+  --accent-soft: #2a78d61a;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --critical: #d03b3b;
+  --good: #0ca30c;
+  --grid: #f0f0ee;
+  --surface: #ffffff;
+  --surface-2: #f4f4f3;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e0e0e;
+  --panel: #131313;
+  --subtle: #1b1b1b;
+  --hover: #171717;
+  --border: #232323;
+  --border-strong: #303030;
+  --text: #ececec;
+  --text-2: #a1a1a0;
+  --text-3: #6f6f6d;
+  --accent: #3987e5;
+  --accent-soft: #3987e526;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --critical: #e66767;
+  --good: #0ca30c;
+  --grid: #1c1c1c;
+  --surface: #131313;
+  --surface-2: #1b1b1b;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-subtle: var(--subtle);
+  --color-hover: var(--hover);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-ink: var(--text);
+  --color-ink-2: var(--text-2);
+  --color-ink-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-critical: var(--critical);
+  --color-good: var(--good);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+.num { font-variant-numeric: tabular-nums; }
+::selection { background: var(--accent-soft); }
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-3);
+  background: var(--panel);
+}
+select.ghost {
+  appearance: none;
+  field-sizing: content;
+  min-width: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%2391908c' stroke-width='1.5'%3E%3Cpath d='M4.5 6.5 8 10l3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 14px;
+  padding-right: 24px;
+}
+
+/* Rendered Markdown in message bodies — compact, follows the app's type scale. */
+.md { font-size: 13px; line-height: 1.6; color: var(--text); overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol, .md pre, .md table, .md blockquote { margin: 0 0 0.6em; }
+.md h1, .md h2, .md h3, .md h4 { margin: 0.9em 0 0.4em; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; }
+.md h1 { font-size: 15px; } .md h2 { font-size: 14px; } .md h3, .md h4 { font-size: 13px; }
+.md ul { list-style: disc; padding-left: 1.25em; }
+.md ol { list-style: decimal; padding-left: 1.4em; }
+.md li { margin: 0.15em 0; }
+.md li > ul, .md li > ol { margin: 0.15em 0; }
+.md strong { font-weight: 600; }
+.md a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.md code { font-family: var(--font-mono); font-size: 12px; background: var(--subtle); padding: 1px 4px; border-radius: 4px; }
+.md pre { background: var(--subtle); border-radius: 6px; padding: 10px 12px; overflow-x: auto; }
+.md pre code { background: none; padding: 0; font-size: 12px; line-height: 1.55; }
+.md blockquote { border-left: 2px solid var(--border-strong); padding-left: 10px; color: var(--text-2); }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 0.9em 0; }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; max-width: 100%; font-size: 12.5px; }
+.md th, .md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md th { background: var(--panel); font-weight: 600; }
+.md img { max-width: 100%; }

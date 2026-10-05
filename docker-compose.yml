@@ -1,0 +1,41 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: harness
+      CLICKHOUSE_USER: harness
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-harness}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "127.0.0.1:8123:8123"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"]
+      interval: 5s
+      retries: 20
+
+  harness:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      clickhouse: { condition: service_healthy }
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: harness
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-harness}
+      HARNESS_INGEST_KEY: ${HARNESS_INGEST_KEY:-}
+      HARNESS_READ_KEY: ${HARNESS_READ_KEY:-}
+      HARNESS_RETENTION_DAYS: ${HARNESS_RETENTION_DAYS:-30}
+    ports:
+      - "127.0.0.1:8300:8300"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8300/api/health', timeout=3)"]
+      interval: 15s
+      retries: 5
+
+volumes:
+  clickhouse-data:
