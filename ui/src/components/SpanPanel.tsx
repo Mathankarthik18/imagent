@@ -11,7 +11,7 @@ type Tab = "io" | "attributes" | "events";
 
 export function SpanPanel({ span }: { span: Span }) {
   const [tab, setTab] = useState<Tab>("io");
-  const tools = span.attributes["harness.tools"];
+  const tools = span.attributes["imagent.tools"] ?? span.attributes["harness.tools"];
   const metadata = parsePayload(span.metadata).json;
   const failed = span.status === "error";
   const running = span.status === "running";
@@ -86,7 +86,7 @@ export function SpanPanel({ span }: { span: Span }) {
             <dl className="grid grid-cols-[minmax(120px,38%)_1fr] gap-x-4 font-mono text-[12px]">
               {([["trace_id", <CopyId key="t" value={span.trace_id} />], ["span_id", <CopyId key="s" value={span.span_id} />],
                 ["parent", span.parent_span_id || "—"], ["thread_id", span.thread_id || "—"], ["user_id", span.user_id || "—"],
-                ...Object.entries(span.attributes).filter(([k]) => k !== "harness.tools")] as [string, ReactNode][]).map(([k, v]) => (
+                ...Object.entries(span.attributes).filter(([k]) => k !== "imagent.tools" && k !== "harness.tools")] as [string, ReactNode][]).map(([k, v]) => (
                 <div key={k} className="contents">
                   <dt className="truncate border-b border-line/70 py-1.5 text-ink-3">{k}</dt>
                   <dd className="break-all border-b border-line/70 py-1.5 text-ink-2">{v}</dd>

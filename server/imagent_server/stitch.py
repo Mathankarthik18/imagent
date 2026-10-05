@@ -146,7 +146,7 @@ async def _rewrite(old_trace: str, new_trace: str, root_span: str, new_parent: s
         elif c == "is_root":
             select_cols.append("if(span_id = {root:String}, 0, is_root) AS is_root")
         elif c == "attributes":
-            select_cols.append("if(span_id = {root:String}, mapUpdate(attributes, map('harness.stitched', 'time')), attributes) AS attributes")
+            select_cols.append("if(span_id = {root:String}, mapUpdate(attributes, map('imagent.stitched', 'time')), attributes) AS attributes")
         else:
             select_cols.append(c)
     params = {"old": old_trace, "new": new_trace, "root": root_span, "parent": new_parent}

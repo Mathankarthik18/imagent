@@ -1,4 +1,4 @@
-"""Harness server: OTLP/HTTP ingest, read API, and the built UI."""
+"""Imagent server: OTLP/HTTP ingest, read API, and the built UI."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from .config import settings
 from .ingest import decode_request, split_rows
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger("harness_server")
+logger = logging.getLogger("imagent_server")
 
 
 @asynccontextmanager
@@ -40,12 +40,12 @@ async def lifespan(app: FastAPI):
     await db.close()
 
 
-app = FastAPI(title="Harness", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Imagent", version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
 
 
 def _presented_key(request: Request) -> str:
-    key = request.headers.get("x-harness-key", "")
+    key = request.headers.get("x-imagent-key", "") or request.headers.get("x-harness-key", "")
     auth = request.headers.get("authorization", "")
     if not key and auth.lower().startswith("bearer "):
         key = auth[7:]
@@ -55,7 +55,7 @@ def _presented_key(request: Request) -> str:
 def _require(expected: str):
     def check(request: Request) -> None:
         if expected and not hmac.compare_digest(_presented_key(request), expected):
-            raise HTTPException(status_code=401, detail="invalid or missing harness key")
+            raise HTTPException(status_code=401, detail="invalid or missing imagent key")
     return check
 
 

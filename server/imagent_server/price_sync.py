@@ -64,7 +64,7 @@ def parse_catalog(payload: dict[str, Any]) -> list[list[Any]]:
 
 
 def _fetch() -> dict[str, Any]:
-    req = urllib.request.Request(settings.price_source, headers={"User-Agent": "harness-monitor/0.1"})
+    req = urllib.request.Request(settings.price_source, headers={"User-Agent": "imagent/0.1"})
     with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 — fixed https URL from config
         return json.loads(r.read())
 

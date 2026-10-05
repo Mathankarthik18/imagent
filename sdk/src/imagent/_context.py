@@ -1,6 +1,6 @@
 """Request-scoped trace context (thread/user/session/agent/tags/metadata).
 
-Values set here are stamped onto every harness span started inside the block,
+Values set here are stamped onto every imagent span started inside the block,
 including LangChain runs, so you can later ask "show me every trace for email
 thread X" without threading IDs through your code.
 """
@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
-_ctx: ContextVar[dict[str, Any]] = ContextVar("harness_moni_context", default={})
+_ctx: ContextVar[dict[str, Any]] = ContextVar("imagent_context", default={})
 
 
 def current_context() -> dict[str, Any]:
@@ -20,7 +20,7 @@ def current_context() -> dict[str, Any]:
 
 
 @contextmanager
-def harness_context(
+def context(
     *,
     thread_id: str | None = None,
     user_id: str | None = None,

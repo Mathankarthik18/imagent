@@ -3,7 +3,7 @@
 OpenTelemetry exports a span only when it ends, so a long agent run is invisible
 until it finishes. This processor notices spans that have been open longer than
 ``delay_s`` and exports a lightweight "started" snapshot of each (no payloads,
-``harness.pending=true``). The server keeps those in a separate table and treats a
+``imagent.pending=true``). The server keeps those in a separate table and treats a
 span as running until its finished version arrives. Fast spans never produce one.
 """
 
@@ -21,10 +21,10 @@ from opentelemetry.trace import Status, StatusCode
 
 from . import semconv as sc
 
-logger = logging.getLogger("harness_moni")
+logger = logging.getLogger("imagent")
 
 _DROP = {sc.INPUT, sc.OUTPUT, sc.TOOLS, sc.METADATA}
-PENDING = "harness.pending"
+PENDING = "imagent.pending"
 
 
 class PendingSpanProcessor(SpanProcessor):
@@ -35,7 +35,7 @@ class PendingSpanProcessor(SpanProcessor):
         self._open: dict[int, tuple[Span, float]] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="harness-pending", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="imagent-pending", daemon=True)
         self._thread.start()
 
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:

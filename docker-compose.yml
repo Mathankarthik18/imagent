@@ -1,11 +1,14 @@
+name: imagent-monitor
+
+
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:25.8
     restart: unless-stopped
     environment:
-      CLICKHOUSE_DB: harness
-      CLICKHOUSE_USER: harness
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-harness}
+      CLICKHOUSE_DB: imagent
+      CLICKHOUSE_USER: imagent
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-imagent}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
       - "127.0.0.1:8123:8123"
@@ -18,18 +21,18 @@ services:
       interval: 5s
       retries: 20
 
-  harness:
+  imagent:
     build: .
     restart: unless-stopped
     depends_on:
       clickhouse: { condition: service_healthy }
     environment:
       CLICKHOUSE_HOST: clickhouse
-      CLICKHOUSE_USER: harness
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-harness}
-      HARNESS_INGEST_KEY: ${HARNESS_INGEST_KEY:-}
-      HARNESS_READ_KEY: ${HARNESS_READ_KEY:-}
-      HARNESS_RETENTION_DAYS: ${HARNESS_RETENTION_DAYS:-30}
+      CLICKHOUSE_USER: imagent
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-imagent}
+      IMAGENT_INGEST_KEY: ${IMAGENT_INGEST_KEY:-}
+      IMAGENT_READ_KEY: ${IMAGENT_READ_KEY:-}
+      IMAGENT_RETENTION_DAYS: ${IMAGENT_RETENTION_DAYS:-30}
     ports:
       - "127.0.0.1:8300:8300"
     healthcheck:

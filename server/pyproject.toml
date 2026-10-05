@@ -1,7 +1,7 @@
 [project]
-name = "harness-server"
+name = "imagent-server"
 version = "0.1.0"
-description = "Harness backend: OTLP/HTTP trace ingest → ClickHouse, query API, UI host"
+description = "Imagent backend: OTLP/HTTP trace ingest → ClickHouse, query API, UI host"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
@@ -20,7 +20,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["harness_server"]
+packages = ["imagent_server"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

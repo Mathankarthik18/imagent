@@ -1,8 +1,8 @@
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-import harness_moni as hm
-from harness_moni import runtime
+import imagent
+from imagent import runtime
 
 
 class Spans:
@@ -10,7 +10,7 @@ class Spans:
         self.exporter = exporter
 
     def all(self):
-        hm.flush()
+        imagent.flush()
         return list(self.exporter.get_finished_spans())
 
     def by_name(self, name):
@@ -26,6 +26,6 @@ class Spans:
 def spans():
     runtime.shutdown()
     exporter = InMemorySpanExporter()
-    hm.init(service="test", exporters=[exporter], environment="test")
+    imagent.init(service="test", exporters=[exporter], environment="test")
     yield Spans(exporter)
     runtime.shutdown()

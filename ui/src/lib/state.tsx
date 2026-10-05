@@ -51,13 +51,13 @@ interface AppState {
 const Ctx = createContext<AppState | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
-  const [project, setProjectRaw] = useState<string>(() => load("harness.project.v2", ""));
-  const [range, setRangeRaw] = useState<Range>(() => load<Range>("harness.range.v2", { kind: "preset", id: "24h" }));
+  const [project, setProjectRaw] = useState<string>(() => load("imagent.project.v2", ""));
+  const [range, setRangeRaw] = useState<Range>(() => load<Range>("imagent.range.v2", { kind: "preset", id: "24h" }));
   const [tick, setTick] = useState(0);
   const [autoRefresh, setAutoRefresh] = useState(false);
-  const [timeMode, setTimeMode] = useState<TimeMode>(() => load<TimeMode>("harness.timeMode", "relative"));
+  const [timeMode, setTimeMode] = useState<TimeMode>(() => load<TimeMode>("imagent.timeMode", "relative"));
   const [theme, setTheme] = useState<Theme>(() =>
-    load<Theme | "">("harness.theme.v2", "") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+    load<Theme | "">("imagent.theme.v2", "") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -71,21 +71,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const setProject = useCallback((p: string) => {
     setProjectRaw(p);
-    save("harness.project.v2", p);
+    save("imagent.project.v2", p);
   }, []);
   const setRange = useCallback((r: Range) => {
     setRangeRaw(r);
-    save("harness.range.v2", r);
+    save("imagent.range.v2", r);
     setTick((t) => t + 1);
   }, []);
   const toggleTheme = useCallback(() => setTheme((t) => {
     const next = t === "dark" ? "light" : "dark";
-    save("harness.theme.v2", next);
+    save("imagent.theme.v2", next);
     return next;
   }), []);
   const toggleTimeMode = useCallback(() => setTimeMode((m) => {
     const next = m === "relative" ? "absolute" : "relative";
-    save("harness.timeMode", next);
+    save("imagent.timeMode", next);
     return next;
   }), []);
 

@@ -201,7 +201,7 @@ export interface Facets {
   tags: string[];
 }
 
-const KEY_STORAGE = "harness.readKey";
+const KEY_STORAGE = "imagent.readKey";
 
 export function getReadKey(): string {
   try {
@@ -233,7 +233,7 @@ export async function api<T>(path: string, params: Record<string, string | numbe
   }
   const key = getReadKey();
   const res = await fetch(`${path}${qs.size ? `?${qs}` : ""}`, {
-    headers: key ? { "x-harness-key": key } : {},
+    headers: key ? { "x-imagent-key": key } : {},
   });
   if (!res.ok) {
     let detail = res.statusText;

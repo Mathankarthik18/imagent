@@ -3,16 +3,16 @@ import json
 import pytest
 from opentelemetry.trace import StatusCode
 
-import harness_moni as hm
-from harness_moni import semconv as sc
+import imagent
+from imagent import semconv as sc
 
 
 def test_nested_sync_spans_share_trace_and_mark_root(spans):
-    @hm.observe(kind="tool")
+    @imagent.observe(kind="tool")
     def lookup(imo: str) -> dict:
         return {"imo": imo, "name": "MV Test"}
 
-    @hm.observe("pipeline", kind="agent")
+    @imagent.observe("pipeline", kind="agent")
     def pipeline(x):
         return lookup(x)
 
@@ -29,7 +29,7 @@ def test_nested_sync_spans_share_trace_and_mark_root(spans):
 
 
 async def test_async_error_is_recorded(spans):
-    @hm.observe
+    @imagent.observe
     async def boom():
         raise ValueError("bad noon report")
 
@@ -42,7 +42,7 @@ async def test_async_error_is_recorded(spans):
 
 
 def test_generator_collects_items(spans):
-    @hm.observe
+    @imagent.observe
     def gen():
         yield 1
         yield 2
@@ -52,12 +52,12 @@ def test_generator_collects_items(spans):
 
 
 def test_context_and_redaction(spans):
-    @hm.observe
+    @imagent.observe
     def call(prompt):
         return "ok"
 
-    with hm.harness_context(thread_id="t-1", user_id="u-9", tags=["email"], metadata={"vessel": "ATLAS"}):
-        with hm.harness_context(tags=["noon"]):
+    with imagent.context(thread_id="t-1", user_id="u-9", tags=["email"], metadata={"vessel": "ATLAS"}):
+        with imagent.context(tags=["noon"]):
             call("key sk-abcdefghijklmnopqrstuvwx and card 4111 1111 1111 1111")
 
     s = spans.all()[0]
@@ -71,9 +71,9 @@ def test_context_and_redaction(spans):
 
 
 def test_truncation(spans):
-    hm.get_config().max_content_chars = 50
+    imagent.get_config().max_content_chars = 50
 
-    @hm.observe
+    @imagent.observe
     def big():
         return "x" * 500
 
@@ -84,11 +84,11 @@ def test_truncation(spans):
 
 
 def test_noop_when_not_initialised():
-    from harness_moni import runtime
+    from imagent import runtime
 
     runtime.shutdown()
 
-    @hm.observe
+    @imagent.observe
     def f(x):
         return x * 2
 

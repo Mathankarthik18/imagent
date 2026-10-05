@@ -12,7 +12,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Span
 
 from . import semconv as sc
-from .runtime import apply_context, get_tracer, is_harness_span, record_error, set_content
+from .runtime import apply_context, get_tracer, is_imagent_span, record_error, set_content
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -20,14 +20,14 @@ _KIND_TO_OPERATION = {"llm": "chat", "tool": "execute_tool", "agent": "invoke_ag
 
 
 def _parent() -> tuple[otel_context.Context | None, bool, Span | None]:
-    """(context to start the span in, is_root, parent harness span).
+    """(context to start the span in, is_root, parent imagent span).
 
     Two candidates: the current OTel span (another @observe) and the LangChain
     run currently executing (e.g. the tool calling us). Whichever started
     later is the more deeply nested one.
     """
     current = trace.get_current_span()
-    current = current if is_harness_span(current) else None
+    current = current if is_imagent_span(current) else None
     try:
         from .integrations.langchain import current_run_span
     except ImportError:
@@ -74,7 +74,7 @@ def observe(
     capture_output: bool = True,
     attributes: dict[str, Any] | None = None,
 ) -> Any:
-    """Trace a function call as a harness span.
+    """Trace a function call as a imagent span.
 
     ``kind``: agent | tool | llm | retriever | chain | span — drives how the UI
     renders it. Usable bare (``@observe``) or configured (``@observe("x", kind="tool")``).

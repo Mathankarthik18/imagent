@@ -8,7 +8,7 @@ import urllib.request
 import pytest
 from fastapi.testclient import TestClient
 
-import harness_moni as hm
+import imagent
 
 from .conftest import otlp_bytes
 
@@ -25,8 +25,8 @@ pytestmark = pytest.mark.skipif(not _clickhouse_up(), reason="ClickHouse not run
 
 @pytest.fixture(scope="module")
 def client():
-    from harness_server import db
-    from harness_server.main import app
+    from imagent_server import db
+    from imagent_server.main import app
 
     with TestClient(app) as c:
         c.portal.call(db.query, f"TRUNCATE TABLE {db.SPANS}")
@@ -40,25 +40,25 @@ def test_ingest_requires_key(client):
 
 
 def test_roundtrip(client, sdk_spans):
-    @hm.observe("lookup_vessel", kind="tool")
+    @imagent.observe("lookup_vessel", kind="tool")
     def lookup(imo):
         return {"imo": imo}
 
-    @hm.observe("email_router", kind="agent")
+    @imagent.observe("email_router", kind="agent")
     def router(n):
         if n == 2:
             raise RuntimeError("classifier timeout")
         return lookup(str(n))
 
     for n in range(3):
-        with hm.harness_context(thread_id="thread-A" if n < 2 else "thread-B", user_id="u1", tags=["email"]):
+        with imagent.context(thread_id="thread-A" if n < 2 else "thread-B", user_id="u1", tags=["email"]):
             try:
                 router(n)
             except RuntimeError:
                 pass
 
     r = client.post("/v1/traces", content=otlp_bytes(sdk_spans()),
-                    headers={"content-type": "application/x-protobuf", "x-harness-key": "ingest-secret"})
+                    headers={"content-type": "application/x-protobuf", "x-imagent-key": "ingest-secret"})
     assert r.status_code == 200, r.text
 
     traces = client.get("/api/traces", params={"project": "bosun-test"}).json()
@@ -96,13 +96,13 @@ def test_roundtrip(client, sdk_spans):
 
 
 def test_thread_grouping_and_summary(client, sdk_spans):
-    @hm.observe("orphan_job", kind="agent")
+    @imagent.observe("orphan_job", kind="agent")
     def orphan():
         return "no thread here"
 
     orphan()
     r = client.post("/v1/traces", content=otlp_bytes(sdk_spans()),
-                    headers={"content-type": "application/x-protobuf", "x-harness-key": "ingest-secret"})
+                    headers={"content-type": "application/x-protobuf", "x-imagent-key": "ingest-secret"})
     assert r.status_code == 200
 
     groups = client.get("/api/traces/by-thread", params={"project": "bosun-test"}).json()["items"]
@@ -158,16 +158,16 @@ def test_stitch_merges_broken_off_runs_by_time(client):
     exp = InMemorySpanExporter()
     tp = TracerProvider(resource=Resource.create({"service.name": "stitch-test"}))
     tp.add_span_processor(SimpleSpanProcessor(exp))
-    tr = tp.get_tracer("harness_moni")
+    tr = tp.get_tracer("imagent")
     t0 = time.time_ns() - 600 * 10**9          # 10 minutes ago → past the settle window
     ms = 10**6
-    base = {"harness.thread_id": "thr-stitch"}
+    base = {"imagent.thread_id": "thr-stitch"}
 
     def span(name, kind, start, end, parent=None, md=None, **attrs):
         ctx = set_span_in_context(parent) if parent is not None else None
-        a = {**base, "harness.span_kind": kind, "harness.root": parent is None, **attrs}
+        a = {**base, "imagent.span_kind": kind, "imagent.root": parent is None, **attrs}
         if md:
-            a["harness.metadata"] = json.dumps(md)
+            a["imagent.metadata"] = json.dumps(md)
         s = tr.start_span(name, context=ctx, start_time=t0 + start * ms, attributes=a)
         return s, end
 
@@ -191,7 +191,7 @@ def test_stitch_merges_broken_off_runs_by_time(client):
 
     from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
     r = client.post("/v1/traces", content=encode_spans(exp.get_finished_spans()).SerializeToString(),
-                    headers={"content-type": "application/x-protobuf", "x-harness-key": "ingest-secret"})
+                    headers={"content-type": "application/x-protobuf", "x-imagent-key": "ingest-secret"})
     assert r.status_code == 200
     before = client.get("/api/traces", params={"project": "stitch-test", "start": "2020-01-01T00:00:00Z"}).json()["items"]
     assert len(before) == 4
@@ -213,13 +213,13 @@ def test_stitch_merges_broken_off_runs_by_time(client):
 
 
 def test_readable_previews_and_latest(client, sdk_spans):
-    @hm.observe("chat_turn", kind="agent")
+    @imagent.observe("chat_turn", kind="agent")
     def turn(state):
         return {"messages": [*state["messages"], {"role": "assistant", "content": [{"type": "text", "text": "Speed is 12.4 kn."}]}]}
 
     turn({"messages": [{"role": "system", "content": "You are Bosun."}, {"role": "user", "content": "How fast is  ATLAS?"}]})
     client.post("/v1/traces", content=otlp_bytes(sdk_spans()),
-                headers={"content-type": "application/x-protobuf", "x-harness-key": "ingest-secret"})
+                headers={"content-type": "application/x-protobuf", "x-imagent-key": "ingest-secret"})
     t = next(t for t in client.get("/api/traces", params={"name": "chat_turn"}).json()["items"])
     assert t["input_text"] == "How fast is ATLAS?"
     assert t["output_text"] == "Speed is 12.4 kn."
@@ -236,7 +236,7 @@ def test_running_runs_live_progress(client):
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from harness_moni.pending import PendingSpanProcessor
+    from imagent.pending import PendingSpanProcessor
 
     done, pending = InMemorySpanExporter(), InMemorySpanExporter()
     tp = TracerProvider(resource=Resource.create({"service.name": "live-test"}))
@@ -244,17 +244,17 @@ def test_running_runs_live_progress(client):
     tp.add_span_processor(SimpleSpanProcessor(done))
     proc = PendingSpanProcessor(pending, delay_s=0, interval_s=3600)
     tp.add_span_processor(proc)
-    tr = tp.get_tracer("harness_moni")
+    tr = tp.get_tracer("imagent")
     post = lambda spans: client.post("/v1/traces", content=encode_spans(spans).SerializeToString(),
-                                     headers={"content-type": "application/x-protobuf", "x-harness-key": "ingest-secret"})
+                                     headers={"content-type": "application/x-protobuf", "x-imagent-key": "ingest-secret"})
 
-    root = tr.start_span("orchestrator", attributes={"harness.span_kind": "agent", "harness.root": True, "harness.thread_id": "thr-live"})
+    root = tr.start_span("orchestrator", attributes={"imagent.span_kind": "agent", "imagent.root": True, "imagent.thread_id": "thr-live"})
     from opentelemetry.trace import set_span_in_context
-    with tr.start_as_current_span("model", context=set_span_in_context(root), attributes={"harness.span_kind": "node", "harness.thread_id": "thr-live"}):
-        with tr.start_as_current_span("glm", attributes={"harness.span_kind": "llm", "gen_ai.usage.input_tokens": 100,
-                                                         "gen_ai.usage.output_tokens": 5, "harness.thread_id": "thr-live"}):
+    with tr.start_as_current_span("model", context=set_span_in_context(root), attributes={"imagent.span_kind": "node", "imagent.thread_id": "thr-live"}):
+        with tr.start_as_current_span("glm", attributes={"imagent.span_kind": "llm", "gen_ai.usage.input_tokens": 100,
+                                                         "gen_ai.usage.output_tokens": 5, "imagent.thread_id": "thr-live"}):
             pass
-    tool = tr.start_span("task", context=set_span_in_context(root), attributes={"harness.span_kind": "tool", "harness.thread_id": "thr-live"})
+    tool = tr.start_span("task", context=set_span_in_context(root), attributes={"imagent.span_kind": "tool", "imagent.thread_id": "thr-live"})
     time.sleep(0.01)
     proc.flush_pending()                      # root + tool are still open
     assert post(done.get_finished_spans()).status_code == 200
@@ -283,8 +283,8 @@ def test_running_runs_live_progress(client):
 def test_reprice_fixes_unpriced_and_doubled_streamed_names(client):
     import datetime as dt
 
-    from harness_server import db, pricing
-    from harness_server.price_sync import reprice
+    from imagent_server import db, pricing
+    from imagent_server.price_sync import reprice
 
     now = dt.datetime.now(dt.timezone.utc)
     row = dict(zip(db.COLUMNS, [

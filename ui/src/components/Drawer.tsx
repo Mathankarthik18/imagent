@@ -7,7 +7,7 @@ import { Icon } from "./icons";
 export function Drawer({ title, href, onClose, children }: {
   title: ReactNode; href?: string; onClose: () => void; children: ReactNode;
 }) {
-  const [width, setWidth] = useStoredSize("harness.drawer.width", Math.round(window.innerWidth * 0.62));
+  const [width, setWidth] = useStoredSize("imagent.drawer.width", Math.round(window.innerWidth * 0.62));
 
   useEffect(() => {
     const on = (e: KeyboardEvent) => {

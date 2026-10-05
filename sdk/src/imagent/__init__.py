@@ -1,19 +1,19 @@
-"""ai-harness-moni — OpenTelemetry-native tracing for LLM agents.
+"""imagent — OpenTelemetry-native tracing for LLM agents.
 
-    import harness_moni as hm
-    hm.init(service="bosun")            # LangChain/LangGraph auto-instrumented
+    import imagent
+    imagent.init(service="bosun")            # LangChain/LangGraph auto-instrumented
 
-    @hm.observe(kind="tool")
+    @imagent.observe(kind="tool")
     def lookup_vessel(imo: str): ...
 
-    with hm.harness_context(thread_id=email_thread_id, user_id=user.id):
+    with imagent.context(thread_id=email_thread_id, user_id=user.id):
         graph.invoke(...)
 """
 
-from .context import harness_context
+from ._context import context
 from .decorators import observe
 from .redact import default_redactor, make_redactor
-from .runtime import HarnessConfig, flush, get_config, init, shutdown
+from .runtime import ImagentConfig, flush, get_config, init, shutdown
 
 
 def get_callback_handler():
@@ -24,12 +24,12 @@ def get_callback_handler():
 
 
 __all__ = [
-    "HarnessConfig",
+    "ImagentConfig",
     "default_redactor",
     "flush",
     "get_callback_handler",
     "get_config",
-    "harness_context",
+    "context",
     "init",
     "make_redactor",
     "observe",

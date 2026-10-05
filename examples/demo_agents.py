@@ -1,7 +1,7 @@
 """Generate realistic demo traces without spending on LLM calls.
 
 Runs Bosun-shaped LangGraph agents backed by fake chat models, exported over
-real OTLP/HTTP to a harness server:
+real OTLP/HTTP to a imagent server:
 
     cd sdk && .venv/bin/python ../examples/demo_agents.py --runs 40 --endpoint http://localhost:8300
 """
@@ -21,7 +21,7 @@ from langchain_core.tools import tool
 from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
-import harness_moni as hm
+import imagent
 
 VESSELS = ["ATLAS VOYAGER", "NORDIC PEARL", "CAPE HARMONY", "SEA BREEZE", "OCEAN LIBERTY"]
 MODELS = ["anthropic/claude-sonnet-5.5", "anthropic/claude-haiku-4.5", "anthropic/claude-opus-5.5"]
@@ -32,7 +32,7 @@ class FakeToolModel(GenericFakeChatModel):
         return self
 
 
-@hm.observe("mongo.find_vessel", kind="retriever")
+@imagent.observe("mongo.find_vessel", kind="retriever")
 def find_vessel(name: str) -> dict:
     time.sleep(random.uniform(0.005, 0.03))
     return {"name": name, "imo": str(9_000_000 + abs(hash(name)) % 999_999), "type": "Bulk Carrier"}
@@ -103,7 +103,7 @@ def classifier(model: str):
                                                   **usage(model, random.randint(800, 2500), 12, 0))]))
 
 
-@hm.observe("process_email", kind="agent")
+@imagent.observe("process_email", kind="agent")
 async def process_email(vessel: str, model: str) -> str:
     subject = f"{vessel} - Noon report {random.randint(1, 28)}/10"
     cls = await classifier("anthropic/claude-haiku-4.5").ainvoke(
@@ -120,13 +120,13 @@ async def main(runs: int) -> None:
     threads = [f"gmail-thread-{uuid.uuid4().hex[:10]}" for _ in range(max(runs // 3, 1))]
     for _ in range(runs):
         vessel = random.choice(VESSELS)
-        with hm.harness_context(thread_id=random.choice(threads), user_id=random.choice(["ops@marlo", "tech@marlo"]),
+        with imagent.context(thread_id=random.choice(threads), user_id=random.choice(["ops@marlo", "tech@marlo"]),
                                 tags=["email", "demo"], metadata={"vessel": vessel}):
             try:
                 await process_email(vessel, random.choice(MODELS))
             except Exception as exc:  # errors are part of the demo
                 print("run failed:", exc)
-    hm.flush()
+    imagent.flush()
 
 
 if __name__ == "__main__":
@@ -135,6 +135,6 @@ if __name__ == "__main__":
     ap.add_argument("--endpoint", default="http://localhost:8300")
     ap.add_argument("--api-key", default=None)
     args = ap.parse_args()
-    hm.init(service="bosun-demo", endpoint=args.endpoint, api_key=args.api_key, environment="dev")
+    imagent.init(service="bosun-demo", endpoint=args.endpoint, api_key=args.api_key, environment="dev")
     asyncio.run(main(args.runs))
     print("done")

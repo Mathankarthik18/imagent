@@ -1,6 +1,6 @@
 """OTLP/HTTP trace payload (protobuf or JSON) → ClickHouse rows.
 
-Understands harness SDK spans fully and any OTel GenAI-convention span
+Understands imagent SDK spans fully and any OTel GenAI-convention span
 (OpenLLMetry, OpenInference, vendor SDKs) on a best-effort basis.
 """
 
@@ -23,8 +23,8 @@ _UTC = dt.timezone.utc
 
 # Attributes lifted into dedicated columns (not duplicated into the attributes map).
 _LIFTED = {
-    "harness.span_kind", "harness.root", "harness.input", "harness.output", "harness.metadata", "harness.tags",
-    "harness.thread_id", "harness.user_id", "harness.session_id", "harness.cost_usd", "harness.ttft_ms",
+    "imagent.span_kind", "imagent.root", "imagent.input", "imagent.output", "imagent.metadata", "imagent.tags",
+    "imagent.thread_id", "imagent.user_id", "imagent.session_id", "imagent.cost_usd", "imagent.ttft_ms",
     "gen_ai.agent.name", "gen_ai.request.model", "gen_ai.response.model", "gen_ai.system",
     "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.prompt_tokens",
     "gen_ai.usage.completion_tokens", "gen_ai.usage.cache_read_input_tokens",
@@ -90,7 +90,8 @@ def _any(v: AnyValue) -> Any:
 
 
 def _attrs(kvs) -> dict[str, Any]:
-    return {kv.key: _any(kv.value) for kv in kvs}
+    # Spans from SDK versions before the rename use the "harness." prefix.
+    return {("imagent." + kv.key[8:] if kv.key.startswith("harness.") else kv.key): _any(kv.value) for kv in kvs}
 
 
 def _int(v: Any) -> int:
@@ -120,8 +121,8 @@ def _ts(ns: int) -> dt.datetime:
 
 
 def _kind(a: dict[str, Any]) -> str:
-    if a.get("harness.span_kind"):
-        return str(a["harness.span_kind"])
+    if a.get("imagent.span_kind"):
+        return str(a["imagent.span_kind"])
     oi = a.get("openinference.span.kind")
     if oi in _OPENINFERENCE_KIND:
         return _OPENINFERENCE_KIND[oi]
@@ -139,7 +140,7 @@ def span_rows(req: ExportTraceServiceRequest) -> list[list]:
 
 def split_rows(req: ExportTraceServiceRequest) -> tuple[list[list], list[list]]:
     """(finished span rows, running-span rows). Running rows are SDK "started"
-    snapshots (``harness.pending``) and go to the running_spans table."""
+    snapshots (``imagent.pending``) and go to the running_spans table."""
     rows: list[list] = []
     running: list[list] = []
     for rs in req.resource_spans:
@@ -150,27 +151,27 @@ def split_rows(req: ExportTraceServiceRequest) -> tuple[list[list], list[list]]:
             for sp in ss.spans:
                 a = _attrs(sp.attributes)
                 kind = _kind(a)
-                if a.get("harness.pending"):
+                if a.get("imagent.pending"):
                     parent = sp.parent_span_id.hex()
                     running.append([
                         project, sp.trace_id.hex(), sp.span_id.hex(), parent,
-                        1 if (a.get("harness.root") if "harness.root" in a else not parent) else 0,
+                        1 if (a.get("imagent.root") if "imagent.root" in a else not parent) else 0,
                         sp.name, kind, _ts(sp.start_time_unix_nano),
-                        str(a.get("harness.thread_id") or ""), str(a.get("harness.user_id") or ""),
+                        str(a.get("imagent.thread_id") or ""), str(a.get("imagent.user_id") or ""),
                         str(a.get("gen_ai.agent.name") or ""),
                         str(a.get("gen_ai.response.model") or a.get("gen_ai.request.model") or ""),
                     ])
                     continue
                 start_ns, end_ns = sp.start_time_unix_nano, sp.end_time_unix_nano or sp.start_time_unix_nano
                 parent = sp.parent_span_id.hex()
-                is_root = bool(a.get("harness.root")) if "harness.root" in a else not parent
+                is_root = bool(a.get("imagent.root")) if "imagent.root" in a else not parent
 
                 model = pricing.unrepeat(str(a.get("gen_ai.response.model") or a.get("gen_ai.request.model") or ""))
                 inp = _int(a.get("gen_ai.usage.input_tokens", a.get("gen_ai.usage.prompt_tokens")))
                 out = _int(a.get("gen_ai.usage.output_tokens", a.get("gen_ai.usage.completion_tokens")))
                 cache_r = _int(a.get("gen_ai.usage.cache_read_input_tokens"))
                 cache_w = _int(a.get("gen_ai.usage.cache_creation_input_tokens"))
-                cost = _float(a.get("harness.cost_usd"))
+                cost = _float(a.get("imagent.cost_usd"))
                 cost_source = "provider" if cost is not None else ""
                 if cost is None and kind == "llm" and (inp or out):
                     cost = pricing.compute_cost(model, inp, out, cache_r, cache_w)
@@ -179,7 +180,7 @@ def split_rows(req: ExportTraceServiceRequest) -> tuple[list[list], list[list]]:
                 status_code = sp.status.code  # 0 unset, 1 ok, 2 error
                 events = [{"name": e.name, "time": _ts(e.time_unix_nano).isoformat(),
                            "attributes": _attrs(e.attributes)} for e in sp.events]
-                tags = a.get("harness.tags") or []
+                tags = a.get("imagent.tags") or []
                 rows.append([
                     project,
                     environment,
@@ -194,9 +195,9 @@ def split_rows(req: ExportTraceServiceRequest) -> tuple[list[list], list[list]]:
                     _ts(start_ns),
                     _ts(end_ns),
                     max(end_ns - start_ns, 0) / 1e6,
-                    str(a.get("harness.thread_id") or a.get("session.id") or ""),
-                    str(a.get("harness.user_id") or a.get("user.id") or ""),
-                    str(a.get("harness.session_id") or ""),
+                    str(a.get("imagent.thread_id") or a.get("session.id") or ""),
+                    str(a.get("imagent.user_id") or a.get("user.id") or ""),
+                    str(a.get("imagent.session_id") or ""),
                     str(a.get("gen_ai.agent.name") or ""),
                     model,
                     str(a.get("gen_ai.system") or ""),
@@ -206,11 +207,11 @@ def split_rows(req: ExportTraceServiceRequest) -> tuple[list[list], list[list]]:
                     cache_w,
                     cost or 0.0,
                     cost_source,
-                    _float(a.get("harness.ttft_ms")),
-                    _str(a.get("harness.input") or a.get("input.value") or a.get("gen_ai.prompt")),
-                    _str(a.get("harness.output") or a.get("output.value") or a.get("gen_ai.completion")),
+                    _float(a.get("imagent.ttft_ms")),
+                    _str(a.get("imagent.input") or a.get("input.value") or a.get("gen_ai.prompt")),
+                    _str(a.get("imagent.output") or a.get("output.value") or a.get("gen_ai.completion")),
                     [str(t) for t in tags] if isinstance(tags, list) else [str(tags)],
-                    _str(a.get("harness.metadata")),
+                    _str(a.get("imagent.metadata")),
                     {k: _str(v) for k, v in a.items() if k not in _LIFTED},
                     json.dumps(events, default=str) if events else "",
                 ])

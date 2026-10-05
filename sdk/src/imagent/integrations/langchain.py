@@ -21,7 +21,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Span
 
 from .. import semconv as sc
-from ..runtime import apply_context, get_tracer, is_harness_span, record_error, set_content
+from ..runtime import apply_context, get_tracer, is_imagent_span, record_error, set_content
 from ..serialize import message_to_dict, to_jsonable
 
 # LangGraph control-flow exceptions — not failures.
@@ -115,7 +115,7 @@ def _usage(response: Any, message: Any) -> dict[str, Any]:
     return out
 
 
-class HarnessCallbackHandler(BaseCallbackHandler):
+class ImagentCallbackHandler(BaseCallbackHandler):
     run_inline = True       # keep the caller's contextvars (OTel parent) in async runs
     raise_error = False
 
@@ -199,7 +199,7 @@ class HarnessCallbackHandler(BaseCallbackHandler):
         else:
             ctx = None  # current OTel context: an @observe span, a web request span, or nothing
             current = trace.get_current_span()
-            is_root = not is_harness_span(current)
+            is_root = not is_imagent_span(current)
             outer = None if is_root else current
             if kind == "chain":
                 kind = "agent"
@@ -212,13 +212,13 @@ class HarnessCallbackHandler(BaseCallbackHandler):
         if kind == "agent":
             attrs[sc.GEN_AI_OPERATION] = "invoke_agent"
         # LangChain run ids: lets the backend (and a human) audit/repair the tree.
-        attrs["harness.lc.run_id"] = str(run_id)
+        attrs["imagent.lc.run_id"] = str(run_id)
         if parent_run_id is not None:
-            attrs["harness.lc.parent_run_id"] = str(parent_run_id)
+            attrs["imagent.lc.parent_run_id"] = str(parent_run_id)
         if relinked:
-            attrs["harness.lc.relinked"] = relinked
+            attrs["imagent.lc.relinked"] = relinked
         elif parent is None and parent_run_id is not None:
-            attrs["harness.lc.orphan"] = True
+            attrs["imagent.lc.orphan"] = True
         span = tracer.start_span(name, context=ctx, attributes=attrs)
         visible_tags = [t for t in (tags or []) if not t.startswith(("seq:", "graph:", "langsmith:"))]
         apply_context(span, parent=outer, thread_id=thread_id, agent_name=agent_name, tags=visible_tags,
@@ -403,19 +403,19 @@ class HarnessCallbackHandler(BaseCallbackHandler):
         self._end(run_id, error=error)
 
 
-_handler: HarnessCallbackHandler | None = None
-_handler_var: ContextVar[HarnessCallbackHandler | None] | None = None
+_handler: ImagentCallbackHandler | None = None
+_handler_var: ContextVar[ImagentCallbackHandler | None] | None = None
 
 
-def get_callback_handler() -> HarnessCallbackHandler:
+def get_callback_handler() -> ImagentCallbackHandler:
     """The process-wide handler — pass it as ``callbacks=[...]`` if you disabled auto-instrumentation."""
     global _handler
     if _handler is None:
-        _handler = HarnessCallbackHandler()
+        _handler = ImagentCallbackHandler()
     return _handler
 
 
-def install() -> HarnessCallbackHandler:
+def install() -> ImagentCallbackHandler:
     """Register the handler on every LangChain run in the process (idempotent)."""
     global _handler_var
     handler = get_callback_handler()
@@ -424,7 +424,7 @@ def install() -> HarnessCallbackHandler:
 
         # A ContextVar whose *default* is the handler makes it visible in every
         # thread and task without anyone calling .set().
-        _handler_var = ContextVar("harness_moni_langchain_handler", default=handler)
+        _handler_var = ContextVar("imagent_langchain_handler", default=handler)
         register_configure_hook(_handler_var, inheritable=True)
     return handler
 

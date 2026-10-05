@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-import harness_moni as hm
-from harness_server import pricing
-from harness_server.db import COLUMNS
-from harness_server.ingest import decode_request, span_rows
+import imagent
+from imagent_server import pricing
+from imagent_server.db import COLUMNS
+from imagent_server.ingest import decode_request, span_rows
 
 from .conftest import otlp_bytes
 
@@ -32,15 +32,15 @@ def test_compute_cost_longest_prefix_and_cache():
 
 
 def test_sdk_spans_map_to_rows(sdk_spans):
-    @hm.observe("lookup", kind="tool")
+    @imagent.observe("lookup", kind="tool")
     def lookup(imo):
         return {"imo": imo}
 
-    @hm.observe("router", kind="agent")
+    @imagent.observe("router", kind="agent")
     def router():
         return lookup("9")
 
-    with hm.harness_context(thread_id="thr-1", tags=["email"]):
+    with imagent.context(thread_id="thr-1", tags=["email"]):
         router()
     rows = {r["name"]: r for r in row_dicts(sdk_spans())}
 
@@ -51,7 +51,7 @@ def test_sdk_spans_map_to_rows(sdk_spans):
     assert child["kind"] == "tool" and child["thread_id"] == "thr-1" and child["tags"] == ["email"]
     assert child["agent_name"] == "router"
     assert json.loads(child["output"]) == {"imo": "9"}
-    assert "harness.input" not in child["attributes"]
+    assert "imagent.input" not in child["attributes"]
     assert child["attributes"]["gen_ai.tool.name"] == "lookup"
 
 
@@ -63,14 +63,14 @@ def test_llm_cost_provider_vs_computed():
     exp = InMemorySpanExporter()
     tp = TracerProvider()
     tp.add_span_processor(SimpleSpanProcessor(exp))
-    tracer = tp.get_tracer("other-lib")  # a non-harness GenAI emitter
+    tracer = tp.get_tracer("other-lib")  # a non-imagent GenAI emitter
     with tracer.start_as_current_span("chat claude", attributes={
         "gen_ai.operation.name": "chat", "gen_ai.request.model": "claude-haiku-4-5",
         "gen_ai.usage.input_tokens": 1000, "gen_ai.usage.output_tokens": 200}):
         pass
     with tracer.start_as_current_span("chat or", attributes={
         "gen_ai.operation.name": "chat", "gen_ai.request.model": "x/y",
-        "gen_ai.usage.input_tokens": 5, "gen_ai.usage.output_tokens": 5, "harness.cost_usd": 0.5}):
+        "gen_ai.usage.input_tokens": 5, "gen_ai.usage.output_tokens": 5, "imagent.cost_usd": 0.5}):
         pass
     rows = {r["name"]: r for r in row_dicts(exp.get_finished_spans())}
     computed = rows["chat claude"]
@@ -86,7 +86,7 @@ def test_otlp_json_hex_ids():
         "scopeSpans": [{"spans": [{
             "traceId": "5b8efff798038103d269b633813fc60c", "spanId": "eee19b7ec3c1b174",
             "name": "agent", "startTimeUnixNano": "1700000000000000000", "endTimeUnixNano": "1700000001000000000",
-            "attributes": [{"key": "harness.span_kind", "value": {"stringValue": "agent"}}]}]}]}]}
+            "attributes": [{"key": "imagent.span_kind", "value": {"stringValue": "agent"}}]}]}]}]}
     req = decode_request(json.dumps(payload).encode(), "application/json")
     row = dict(zip(COLUMNS, span_rows(req)[0]))
     assert row["trace_id"] == "5b8efff798038103d269b633813fc60c"
@@ -104,7 +104,7 @@ def test_normalise_provider_ids(model, expected):
 
 
 def test_catalog_parse_and_exact_match_beats_prefix():
-    from harness_server.price_sync import parse_catalog
+    from imagent_server.price_sync import parse_catalog
 
     rows = parse_catalog({"data": [
         {"id": "z-ai/glm-5.3-flash", "pricing": {"prompt": "0.00000015", "completion": "0.0000005", "input_cache_read": "0.00000003"}},
@@ -124,3 +124,19 @@ def test_catalog_parse_and_exact_match_beats_prefix():
         assert pricing.compute_cost("z-ai/glm-5.3-flash", 1_000_000, 0, 1_000_000, 0) == pytest.approx(0.03)
     finally:
         pricing.set_catalog({})
+
+
+def test_legacy_harness_prefix_still_understood():
+    """Apps still on the pre-rename SDK send harness.* attributes."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exp = InMemorySpanExporter()
+    tp = TracerProvider()
+    tp.add_span_processor(SimpleSpanProcessor(exp))
+    with tp.get_tracer("harness_moni").start_as_current_span("old_agent", attributes={
+            "harness.span_kind": "agent", "harness.root": True, "harness.thread_id": "t-old", "harness.input": "hi"}):
+        pass
+    row = row_dicts(exp.get_finished_spans())[0]
+    assert row["kind"] == "agent" and row["is_root"] == 1 and row["thread_id"] == "t-old" and row["input"] == "hi"

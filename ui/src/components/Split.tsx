@@ -8,7 +8,7 @@ export function Split({ id, left, right, initial = 52, min = 28, max = 75, heigh
   /** CSS height for both panes on large screens (e.g. "calc(100vh - 160px)"); panes scroll inside. */
   height?: string;
 }) {
-  const [pct, setPct] = useStoredSize(`harness.split.${id}`, initial);
+  const [pct, setPct] = useStoredSize(`imagent.split.${id}`, initial);
   const box = useRef<HTMLDivElement>(null);
 
   const startDrag = (e: React.PointerEvent) => {

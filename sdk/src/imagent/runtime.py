@@ -1,9 +1,9 @@
 """Global SDK state: config, a dedicated TracerProvider, and the span helpers
 shared by the decorator and the LangChain integration.
 
-Harness keeps its own TracerProvider instead of the global one so that only
-LLM/agent spans reach the harness backend (not every Mongo query an app's
-existing OTel setup records). Parent context still propagates, so a harness
+Imagent keeps its own TracerProvider instead of the global one so that only
+LLM/agent spans reach the imagent backend (not every Mongo query an app's
+existing OTel setup records). Parent context still propagates, so a imagent
 span created inside a FastAPI request shares that request's trace_id.
 """
 
@@ -24,20 +24,28 @@ from opentelemetry.sdk.trace.sampling import ALWAYS_ON, TraceIdRatioBased
 from opentelemetry.trace import Span, Tracer
 
 from . import semconv as sc
-from .context import current_context
+from ._context import current_context
 from .redact import Redactor, default_redactor
 from .serialize import dumps
 
-logger = logging.getLogger("harness_moni")
+logger = logging.getLogger("imagent")
+
+
+def _env(name: str, default: str | None = None) -> str | None:
+    """IMAGENT_<name>, falling back to the pre-rename HARNESS_<name>."""
+    v = os.getenv(f"IMAGENT_{name}")
+    if v is None:
+        v = os.getenv(f"HARNESS_{name}")
+    return default if v is None else v
 
 
 def _env_bool(name: str, default: bool) -> bool:
-    v = os.getenv(name)
+    v = _env(name)
     return default if v is None else v.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass
-class HarnessConfig:
+class ImagentConfig:
     service: str = "default"
     endpoint: str = "http://localhost:8300"
     api_key: str | None = None
@@ -48,7 +56,7 @@ class HarnessConfig:
     redact: Redactor | None = default_redactor
     sample_rate: float = 1.0
     auto_instrument_langchain: bool = True
-    # Extra OTLP/HTTP trace endpoints (e.g. a SigNoz collector) that also get harness spans.
+    # Extra OTLP/HTTP trace endpoints (e.g. a SigNoz collector) that also get imagent spans.
     extra_otlp_endpoints: list[str] = field(default_factory=list)
     # Exporters added verbatim — mostly for tests (InMemorySpanExporter).
     exporters: list[SpanExporter] = field(default_factory=list)
@@ -59,7 +67,7 @@ class HarnessConfig:
 
 
 class _State:
-    def __init__(self, config: HarnessConfig, provider: TracerProvider):
+    def __init__(self, config: ImagentConfig, provider: TracerProvider):
         self.config = config
         self.provider = provider
         self.tracer: Tracer = provider.get_tracer(sc.TRACER_NAME, "0.1.0")
@@ -85,37 +93,37 @@ def init(
     resource_attributes: Mapping[str, Any] | None = None,
     pending_delay_s: float | None = None,
     pending_exporter: SpanExporter | None = None,
-) -> HarnessConfig:
-    """Initialise tracing. Every argument falls back to a ``HARNESS_*`` env var.
+) -> ImagentConfig:
+    """Initialise tracing. Every argument falls back to a ``IMAGENT_*`` env var.
 
     ``redact``: True → default redactor (secrets + card numbers), False/None →
     off, or pass your own ``Callable[[str], str]``.
     """
     global _state
     if _state is not None:
-        logger.debug("harness_moni already initialised")
+        logger.debug("imagent already initialised")
         return _state.config
 
-    cfg = HarnessConfig(
-        service=service or os.getenv("HARNESS_SERVICE") or os.getenv("OTEL_SERVICE_NAME") or "default",
-        endpoint=(endpoint or os.getenv("HARNESS_ENDPOINT") or "http://localhost:8300").rstrip("/"),
-        api_key=api_key or os.getenv("HARNESS_API_KEY") or None,
-        environment=environment or os.getenv("HARNESS_ENVIRONMENT") or None,
-        enabled=enabled if enabled is not None else _env_bool("HARNESS_ENABLED", True),
-        capture_content=capture_content if capture_content is not None else _env_bool("HARNESS_CAPTURE_CONTENT", True),
-        max_content_chars=max_content_chars or int(os.getenv("HARNESS_MAX_CONTENT_CHARS", "32000")),
+    cfg = ImagentConfig(
+        service=service or _env("SERVICE") or os.getenv("OTEL_SERVICE_NAME") or "default",
+        endpoint=(endpoint or _env("ENDPOINT") or "http://localhost:8300").rstrip("/"),
+        api_key=api_key or _env("API_KEY") or None,
+        environment=environment or _env("ENVIRONMENT") or None,
+        enabled=enabled if enabled is not None else _env_bool("ENABLED", True),
+        capture_content=capture_content if capture_content is not None else _env_bool("CAPTURE_CONTENT", True),
+        max_content_chars=max_content_chars or int(_env("MAX_CONTENT_CHARS", "32000")),
         redact=default_redactor if redact is True else (redact or None),
-        sample_rate=sample_rate if sample_rate is not None else float(os.getenv("HARNESS_SAMPLE_RATE", "1.0")),
+        sample_rate=sample_rate if sample_rate is not None else float(_env("SAMPLE_RATE", "1.0")),
         auto_instrument_langchain=auto_instrument_langchain,
         extra_otlp_endpoints=extra_otlp_endpoints
-        or [e for e in os.getenv("HARNESS_EXTRA_OTLP_ENDPOINTS", "").split(",") if e.strip()],
+        or [e for e in _env("EXTRA_OTLP_ENDPOINTS", "").split(",") if e.strip()],
         exporters=exporters or [],
         resource_attributes=resource_attributes or {},
-        pending_delay_s=pending_delay_s if pending_delay_s is not None else float(os.getenv("HARNESS_PENDING_DELAY", "1.5")),
+        pending_delay_s=pending_delay_s if pending_delay_s is not None else float(_env("PENDING_DELAY", "1.5")),
         pending_exporter=pending_exporter,
     )
     if not cfg.enabled:
-        logger.info("harness_moni disabled (HARNESS_ENABLED=false)")
+        logger.info("imagent disabled (IMAGENT_ENABLED=false)")
         return cfg
 
     attrs: dict[str, Any] = {"service.name": cfg.service, **cfg.resource_attributes}
@@ -129,7 +137,7 @@ def init(
     if not cfg.exporters:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-        headers = {"x-harness-key": cfg.api_key} if cfg.api_key else None
+        headers = {"x-imagent-key": cfg.api_key} if cfg.api_key else None
         exporters_.append(OTLPSpanExporter(endpoint=f"{cfg.endpoint}/v1/traces", headers=headers))
         for extra in cfg.extra_otlp_endpoints:
             extra = extra.strip().rstrip("/")
@@ -137,12 +145,12 @@ def init(
     for exp in exporters_:
         provider.add_span_processor(BatchSpanProcessor(exp))
 
-    # Live progress: "started" snapshots of long-running spans go to the harness server only.
+    # Live progress: "started" snapshots of long-running spans go to the imagent server only.
     pending_exp = cfg.pending_exporter
     if pending_exp is None and not cfg.exporters and cfg.pending_delay_s > 0:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-        headers = {"x-harness-key": cfg.api_key} if cfg.api_key else None
+        headers = {"x-imagent-key": cfg.api_key} if cfg.api_key else None
         pending_exp = OTLPSpanExporter(endpoint=f"{cfg.endpoint}/v1/traces", headers=headers, timeout=5)
     if pending_exp is not None and cfg.pending_delay_s > 0:
         from .pending import PendingSpanProcessor
@@ -159,7 +167,7 @@ def init(
             install()
         except ImportError:
             logger.debug("langchain-core not installed; skipping auto-instrumentation")
-    logger.info("harness_moni tracing → %s (service=%s)", cfg.endpoint, cfg.service)
+    logger.info("imagent tracing → %s (service=%s)", cfg.endpoint, cfg.service)
     return cfg
 
 
@@ -177,7 +185,7 @@ def shutdown() -> None:
         _state = None
 
 
-def get_config() -> HarnessConfig | None:
+def get_config() -> ImagentConfig | None:
     return _state.config if _state else None
 
 
@@ -185,7 +193,7 @@ def get_tracer() -> Tracer | None:
     return _state.tracer if _state else None
 
 
-def is_harness_span(span: Span | None) -> bool:
+def is_imagent_span(span: Span | None) -> bool:
     scope = getattr(span, "instrumentation_scope", None)
     return scope is not None and scope.name == sc.TRACER_NAME
 
@@ -203,7 +211,7 @@ def encode_content(obj: Any) -> str | None:
         try:
             s = cfg.redact(s)
         except Exception:
-            logger.exception("harness redactor failed; dropping content")
+            logger.exception("imagent redactor failed; dropping content")
             return "<redaction failed>"
     if len(s) > cfg.max_content_chars:
         s = s[: cfg.max_content_chars] + f"…[truncated {len(s) - cfg.max_content_chars} chars]"
@@ -222,9 +230,9 @@ _INHERITED = {"thread_id": sc.THREAD_ID, "user_id": sc.USER_ID, "session_id": sc
 
 def apply_context(span: Span, *, parent: Span | None = None, **explicit: Any) -> None:
     """Stamp thread/user/session/agent/tags/metadata. Precedence: explicit
-    values > ``harness_context`` > the parent harness span's values."""
+    values > ``imagent.context()`` > the parent imagent span's values."""
     ctx = dict(current_context())
-    parent_attrs = getattr(parent, "attributes", None) if is_harness_span(parent) else None
+    parent_attrs = getattr(parent, "attributes", None) if is_imagent_span(parent) else None
     if parent_attrs:
         for key, attr in _INHERITED.items():
             if not ctx.get(key) and parent_attrs.get(attr):

@@ -6,8 +6,8 @@ from langchain_core.tools import tool
 from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
-import harness_moni as hm
-from harness_moni import semconv as sc
+import imagent
+from imagent import semconv as sc
 
 
 class FakeToolModel(GenericFakeChatModel):
@@ -15,7 +15,7 @@ class FakeToolModel(GenericFakeChatModel):
         return self
 
 
-@hm.observe("fetch_noon_db", kind="retriever")
+@imagent.observe("fetch_noon_db", kind="retriever")
 def fetch_noon_db(vessel: str) -> dict:
     return {"vessel": vessel, "speed": 12.4}
 
@@ -51,7 +51,7 @@ def build_graph():
 
 def test_langgraph_agent_span_tree(spans):
     graph = build_graph()
-    with hm.harness_context(user_id="u-1"):
+    with imagent.context(user_id="u-1"):
         result = graph.invoke({"messages": [HumanMessage("How fast is ATLAS?")]},
                               config={"configurable": {"thread_id": "email-42"}})
     assert result["messages"][-1].content == "ATLAS is doing 12.4 kn."
@@ -105,7 +105,7 @@ def test_langgraph_agent_span_tree(spans):
 async def test_langgraph_async_nests_under_observe(spans):
     graph = build_graph()
 
-    @hm.observe("handle_email", kind="agent")
+    @imagent.observe("handle_email", kind="agent")
     async def handle_email():
         return await graph.ainvoke({"messages": [HumanMessage("speed?")]},
                                    config={"configurable": {"thread_id": "t-async"}})
@@ -125,11 +125,11 @@ async def test_langgraph_async_nests_under_observe(spans):
 async def test_llm_called_inside_observe_inherits_agent(spans):
     model = GenericFakeChatModel(messages=iter([AIMessage("noon_report")]))
 
-    @hm.observe("process_email", kind="agent")
+    @imagent.observe("process_email", kind="agent")
     async def process():
         return await model.ainvoke("classify", config={"run_name": "classify_email"})
 
-    with hm.harness_context(thread_id="t-9"):
+    with imagent.context(thread_id="t-9"):
         await process()
     llm = spans.by_name("classify_email")
     assert llm.attributes[sc.GEN_AI_AGENT_NAME] == "process_email"
@@ -157,7 +157,7 @@ def test_orphan_runs_relink_by_checkpoint_namespace(spans):
     parent_run_id pointed at runs the handler never saw. They must still nest."""
     import uuid
 
-    from harness_moni.integrations.langchain import get_callback_handler
+    from imagent.integrations.langchain import get_callback_handler
 
     h = get_callback_handler()
     agent, node, llm, tool_run, late = (uuid.uuid4() for _ in range(5))
@@ -184,11 +184,11 @@ def test_orphan_runs_relink_by_checkpoint_namespace(spans):
     model_span = by["model"]
     llm_span = next(s for s in spans.all() if s.attributes.get(sc.SPAN_KIND) == "llm")
     assert llm_span.parent.span_id == model_span.context.span_id
-    assert llm_span.attributes["harness.lc.relinked"] == "checkpoint_ns"
+    assert llm_span.attributes["imagent.lc.relinked"] == "checkpoint_ns"
     assert by["ping"].parent.span_id == model_span.context.span_id
     assert by["late"].parent.span_id == model_span.context.span_id
     assert model_span.parent.span_id == root.context.span_id
-    assert all(s.attributes.get("harness.lc.run_id") for s in spans.all())
+    assert all(s.attributes.get("imagent.lc.run_id") for s in spans.all())
 
 
 def test_streamed_call_metadata_is_not_doubled(spans):
@@ -196,7 +196,7 @@ def test_streamed_call_metadata_is_not_doubled(spans):
     from langchain_core.messages import AIMessageChunk
     from langchain_core.outputs import ChatGeneration, LLMResult
 
-    from harness_moni.integrations.langchain import _unrepeat, get_callback_handler
+    from imagent.integrations.langchain import _unrepeat, get_callback_handler
 
     assert _unrepeat("z-ai/glm-5.3-flashz-ai/glm-5.3-flash") == "z-ai/glm-5.3-flash"
     assert _unrepeat("stopstop") == "stop"

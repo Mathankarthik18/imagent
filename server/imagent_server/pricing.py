@@ -3,7 +3,7 @@
 Provider-reported cost (OpenRouter's ``usage.cost``) always wins. Otherwise a model is
 looked up, in order, in:
 
-1. ``HARNESS_PRICING_FILE`` overrides (JSON: {"model": {"input": .., "output": .., ...}})
+1. ``IMAGENT_PRICING_FILE`` overrides (JSON: {"model": {"input": .., "output": .., ...}})
 2. built-in Anthropic first-party list prices
 3. the synced catalog (OpenRouter's public model list — hundreds of models across
    OpenAI, Google, Meta, Mistral, Z.ai, …), refreshed daily by ``price_sync``

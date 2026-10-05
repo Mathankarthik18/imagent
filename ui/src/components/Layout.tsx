@@ -45,9 +45,9 @@ export function Layout() {
       <aside className="hidden w-[200px] shrink-0 flex-col border-r border-line bg-panel md:flex">
         <div className="flex h-12 items-center gap-2 px-4">
           <span className="grid size-5 place-items-center rounded-[5px] bg-ink text-bg">
-            <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M4.5 12V4M11.5 12V4M4.5 8h7" /></svg>
+            <svg viewBox="0 0 16 16" className="size-3" fill="currentColor"><circle cx="8" cy="3.6" r="1.6" /><rect x="6.6" y="6.4" width="2.8" height="7.4" rx="1.4" /></svg>
           </span>
-          <span className="text-[13.5px] font-semibold tracking-[-0.01em]">harness</span>
+          <span className="text-[13.5px] font-semibold tracking-[-0.01em]">imagent</span>
         </div>
         <nav className="flex flex-col gap-px px-2 pt-1">
           {NAV.map((n) => (
@@ -141,7 +141,7 @@ function KeyDialog({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/20 p-4 dark:bg-black/50" onClick={onClose}>
       <div className="w-full max-w-sm rounded-xl border border-line bg-bg p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <h2 className="font-semibold">Read access key</h2>
-        <p className="mt-1 text-ink-3">Only needed when the server sets <code className="font-mono text-[12px]">HARNESS_READ_KEY</code>. Kept in this browser.</p>
+        <p className="mt-1 text-ink-3">Only needed when the server sets <code className="font-mono text-[12px]">IMAGENT_READ_KEY</code>. Kept in this browser.</p>
         <input className={`${controlCls} mt-3 h-8 w-full`} type="password" value={value} onChange={(e) => setValue(e.target.value)} autoFocus />
         <div className="mt-4 flex justify-end gap-2">
           <button className="h-7 rounded-md px-3 text-ink-2 hover:bg-subtle" onClick={onClose}>Cancel</button>
