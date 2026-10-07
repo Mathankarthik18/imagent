@@ -17,20 +17,27 @@ export const Markdown = memo(function Markdown({ text, className = "" }: { text:
   );
 });
 
-/** Markdown that collapses past `maxHeight` px with a "Show all" toggle. */
+/** Markdown that collapses past `maxHeight` px with a "Show all" toggle. The content's
+ *  natural height is watched continuously, so a panel that is still laying out (or is
+ *  resized later) never leaves a short message stuck collapsed. */
 export function CollapsibleMarkdown({ text, maxHeight = 420 }: { text: string; maxHeight?: number }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
   const [overflows, setOverflows] = useState(false);
   const [expanded, setExpanded] = useState(false);
   useLayoutEffect(() => {
-    const el = ref.current;
-    if (el) setOverflows(el.scrollHeight > maxHeight + 24);
+    const el = inner.current;
+    if (!el) return;
+    const measure = () => setOverflows(el.scrollHeight > maxHeight + 24);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [text, maxHeight]);
   const clipped = overflows && !expanded;
   return (
     <div>
-      <div ref={ref} className="relative overflow-hidden" style={clipped ? { maxHeight } : undefined}>
-        <Markdown text={text} />
+      <div className="relative overflow-hidden" style={clipped ? { maxHeight } : undefined}>
+        <div ref={inner}><Markdown text={text} /></div>
         {clipped && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[var(--bg)] to-transparent" />}
       </div>
       {overflows && (

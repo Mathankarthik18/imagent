@@ -38,6 +38,12 @@ export function TraceDetail() {
             {root.user_id && <span>{root.user_id}</span>}
           </span>
         )}
+        {root && (
+          <Link to={`/experiments?new=1&root=${encodeURIComponent(root.name)}&sources=${traceId}`}
+            className="ml-auto inline-flex h-7 items-center rounded-md border border-line px-2.5 text-[12.5px] text-ink-2 hover:border-line-strong hover:text-ink">
+            Replay with another model
+          </Link>
+        )}
       </div>
       <TraceView traceId={traceId} selected={params.get("span")} onSelect={select} />
     </div>

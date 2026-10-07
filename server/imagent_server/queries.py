@@ -33,6 +33,8 @@ def _base_where(f: Filters, params: dict[str, Any], alias: str = "") -> list[str
     if f.project:
         params["project"] = f.project
         where.append(f"{p}project = {{project:String}}")
+    else:
+        where.append(f"NOT endsWith({p}project, '/experiments')")  # replays never inflate normal views
     if f.environment:
         params["environment"] = f.environment
         where.append(f"{p}environment = {{environment:String}}")

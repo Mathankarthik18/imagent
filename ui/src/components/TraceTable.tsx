@@ -5,8 +5,10 @@ import { Time } from "./Time";
 import { KindIcon, rowCls, StatusMark, td, th } from "./ui";
 
 /** Dense trace list. Rows are keyboard-selectable (`active`) and open via `onOpen`. */
-export function TraceTable({ items, onOpen, active = -1, showThread = true, indexOffset = 0, running }: {
+export function TraceTable({ items, onOpen, active = -1, showThread = true, indexOffset = 0, running, selected, onToggle }: {
   items: TraceSummary[];
+  selected?: Set<string>;
+  onToggle?: (t: TraceSummary) => void;
   running?: Map<string, RunningRun>;
   onOpen: (t: TraceSummary, index: number) => void;
   active?: number;
@@ -18,6 +20,7 @@ export function TraceTable({ items, onOpen, active = -1, showThread = true, inde
       <table className="w-full min-w-[820px] border-separate border-spacing-0">
         <thead>
           <tr>
+            {onToggle && <th className={`${th} w-8 pl-3 pr-0`} aria-label="Select" />}
             <th className={`${th} w-8 pl-3 pr-0`} aria-label="Status" />
             <th className={th}>Trace</th>
             {showThread && <th className={th}>Thread</th>}
@@ -38,6 +41,11 @@ export function TraceTable({ items, onOpen, active = -1, showThread = true, inde
             const kind = live ? live.kind : t.kind;
             return (
               <tr key={t.trace_id} data-row-index={idx} onClick={() => onOpen(t, idx)} className={rowCls(idx === active)}>
+                {onToggle && (
+                  <td className={`${td} pl-3 pr-0`} onClick={(e) => { e.stopPropagation(); onToggle(t); }}>
+                    <input type="checkbox" aria-label="Select run" className="accent-[var(--accent)]" checked={selected?.has(t.trace_id) ?? false} readOnly />
+                  </td>
+                )}
                 <td className={`${td} pl-3 pr-0`}><StatusMark errors={t.error_count} /></td>
                 <td className={`${td} max-w-0 w-[52%]`}>
                   <div className="flex min-w-0 items-center gap-1.5">

@@ -31,6 +31,9 @@ def client():
     with TestClient(app) as c:
         c.portal.call(db.query, f"TRUNCATE TABLE {db.SPANS}")
         c.portal.call(db.query, f"TRUNCATE TABLE {db.RUNNING}")
+        from imagent_server import experiments as _exp
+        c.portal.call(db.query, f"TRUNCATE TABLE IF EXISTS {_exp.JOBS}")
+        c.portal.call(db.query, f"TRUNCATE TABLE IF EXISTS {_exp.EXPERIMENTS}")
         yield c
 
 
@@ -301,3 +304,95 @@ def test_reprice_fixes_unpriced_and_doubled_streamed_names(client):
         assert client.portal.call(reprice, 1) == 0                            # idempotent
     finally:
         pricing.set_catalog({})
+
+
+def _post_spans(client, spans):
+    from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+    r = client.post("/v1/traces", content=encode_spans(spans).SerializeToString(),
+                    headers={"content-type": "application/x-protobuf", "x-imagent-key": "ingest-secret"})
+    assert r.status_code == 200
+
+
+def _agent_run(tracer, tools, answer, *, thread="", root_name="email_router", extra_root=None):
+    """Synthetic agent run: root agent → llm → tool calls."""
+    import json as _json
+    attrs = {"imagent.span_kind": "agent", "imagent.root": True,
+             "imagent.input": _json.dumps({"messages": [{"role": "user", "content": "Noon report NORD KUDU"}]}),
+             "imagent.output": _json.dumps({"messages": [{"role": "assistant", "content": answer}]}), **(extra_root or {})}
+    if thread:
+        attrs["imagent.thread_id"] = thread
+    with tracer.start_as_current_span(root_name, attributes=attrs) as root:
+        with tracer.start_as_current_span("glm", attributes={"imagent.span_kind": "llm", "gen_ai.request.model": "x",
+                                                            "imagent.input": _json.dumps([{"role": "user", "content": "Noon report NORD KUDU"}]),
+                                                            "gen_ai.usage.input_tokens": 100, "gen_ai.usage.output_tokens": 10}):
+            pass
+        for name, args, out in tools:
+            with tracer.start_as_current_span(name, attributes={"imagent.span_kind": "tool", "imagent.input": _json.dumps(args),
+                                                                "imagent.output": _json.dumps({"role": "tool", "content": out})}):
+                pass
+    return format(root.get_span_context().trace_id, "032x")
+
+
+def test_compare_and_experiment_lifecycle(client):
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exp_ = InMemorySpanExporter()
+    tp = TracerProvider(resource=Resource.create({"service.name": "exp-test"}))
+    tp.add_span_processor(SimpleSpanProcessor(exp_))
+    tr = tp.get_tracer("imagent")
+    src = _agent_run(tr, [("lookup_vessel", {"name": "NORD KUDU"}, "imo 9623740"), ("create_task", {"title": "Check noon"}, "T-1")],
+                     "Created task T-1.")
+    _post_spans(client, exp_.get_finished_spans())
+    exp_.clear()
+
+    # Phase 1: compare two runs directly
+    other = _agent_run(tr, [("lookup_vessel", {"name": "NORD KUDU"}, "imo 9623740")], "No task needed.")
+    _post_spans(client, exp_.get_finished_spans())
+    exp_.clear()
+    c = client.get("/api/compare", params={"a": src, "b": other}).json()
+    assert c["missing_tools"] == ["create_task"] and c["extra_tools"] == [] and c["verdict"] == "diverged"
+    assert [r["status"] for r in c["rows"]] == ["same", "only_a"]
+    assert c["outputs"]["a"] == "Created task T-1." and c["metrics"]["a"]["tool_calls"] == 2
+
+    # Phase 2: no runner → can't create
+    body = {"agent": "email", "source_trace_ids": [src], "variants": [{"name": "glm", "model": "z-ai/glm"}], "repeats": 1}
+    assert client.post("/api/experiments", json=body).status_code == 409
+    key = {"x-imagent-key": "ingest-secret"}
+    agents = [{"name": "email", "source_root": "email_router"}]
+    assert client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents}, headers=key).status_code == 204
+    assert client.get("/api/runners").json()[0]["agents"][0]["name"] == "email"
+    assert client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents}).status_code == 401  # needs ingest key
+
+    created = client.post("/api/experiments", json=body).json()
+    assert created["jobs"] == 1
+    job = client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents}, headers=key).json()
+    assert job["variant"]["model"] == "z-ai/glm" and job["source"]["trace_id"] == src
+    assert [f["name"] for f in job["fixtures"]] == ["lookup_vessel", "create_task"]
+    assert job["fixtures"][0]["output"] == "imo 9623740"
+    assert job["history"] == [{"role": "user", "content": "Noon report NORD KUDU"}]
+    assert job["thread_id"].startswith("experiment:")
+    assert client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents}, headers=key).status_code == 204
+
+    # The runner's replay: same lookup (recorded), skipped the task → a regression vs baseline.
+    res = _agent_run(tr, [("lookup_vessel", {"name": "NORD KUDU"}, "imo 9623740")], "No task needed.",
+                     thread=job["thread_id"], root_name="replay:email")
+    _post_spans(client, exp_.get_finished_spans())
+    client.post("/api/runner/complete", json={"job_id": job["job_id"], "trace_id": res, "status": "ok", "output": "No task needed."},
+                headers=key)
+
+    d = client.get(f"/api/experiments/{created['id']}").json()
+    assert d["status"] == "done" and d["sources"][0]["input_text"] == "Noon report NORD KUDU"
+    score = d["jobs"][0]["score"]
+    assert score["verdict"] == "diverged" and score["missing_tools"] == ["create_task"]
+    assert score["metrics"]["tool_calls"] == 1 and score["baseline_metrics"]["tool_calls"] == 2
+    lst = client.get("/api/experiments").json()
+    assert lst[0]["jobs"]["done"] == 1 and lst[0]["variants"] == ["glm"]
+
+    # Replays live in their own project and never inflate normal views.
+    projects = client.get("/api/projects").json()
+    assert "exp-test/experiments" in projects
+    names = [t["name"] for t in client.get("/api/traces", params={"start": "2020-01-01T00:00:00Z"}).json()["items"]]
+    assert "replay:email" not in names

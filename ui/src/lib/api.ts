@@ -246,3 +246,128 @@ export async function api<T>(path: string, params: Record<string, string | numbe
   }
   return res.json() as Promise<T>;
 }
+
+// ── compare & experiments ────────────────────────────────────────────────────
+export interface ToolCallInfo {
+  span_id: string;
+  trace_id: string;
+  name: string;
+  args: string;
+  output: string;
+  status: string;
+  duration_ms: number;
+  replay: string;
+}
+
+export interface RunMetrics {
+  duration_ms: number;
+  llm_calls: number;
+  tool_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  models: string[];
+  errors: number;
+}
+
+export type Verdict = "match" | "partial" | "diverged" | "failed";
+
+export interface Comparison {
+  a: string;
+  b: string;
+  verdict: Verdict;
+  tool_match: number;
+  args_match: number;
+  output_similarity: number;
+  missing_tools: string[];
+  extra_tools: string[];
+  rows: { status: "same" | "args_differ" | "only_a" | "only_b"; a: ToolCallInfo | null; b: ToolCallInfo | null }[];
+  outputs: { a: string; b: string };
+  metrics: { a: RunMetrics; b: RunMetrics };
+  names: { a: string; b: string };
+}
+
+export interface RunnerAgent { name: string; source_root: string; description: string; read_tools: string[]; models: string[] }
+export interface Runner { runner_id: string; host: string; agents: RunnerAgent[]; seconds_ago: number }
+
+export interface Variant { name: string; model: string }
+
+export interface JobScore {
+  verdict: Verdict;
+  tool_match: number;
+  args_match: number;
+  output_similarity: number;
+  missing_tools: string[];
+  extra_tools: string[];
+  metrics: RunMetrics;
+  baseline_metrics: RunMetrics;
+  output: string;
+}
+
+export interface ExperimentJob {
+  id: string;
+  source_trace_id: string;
+  variant: string;
+  repeat: number;
+  status: "queued" | "running" | "done" | "error";
+  result_trace_id: string;
+  error: string;
+  output: string;
+  score: JobScore | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface ExperimentSource {
+  trace_id: string;
+  name: string;
+  start_time: string;
+  input_text: string;
+  output_text: string;
+  metrics: RunMetrics;
+}
+
+export interface Experiment {
+  id: string;
+  name: string;
+  agent: string;
+  project: string;
+  status: "running" | "done" | "failed";
+  created_at: string;
+  config: { source_trace_ids: string[]; variants: Variant[]; repeats: number; tool_mode: "recorded" | "live_reads" };
+  sources: ExperimentSource[];
+  jobs: ExperimentJob[];
+}
+
+export interface ExperimentSummary {
+  id: string;
+  name: string;
+  agent: string;
+  status: string;
+  created_at: string;
+  variants: string[];
+  sources: number;
+  repeats: number;
+  tool_mode: string;
+  jobs: { total: number; done: number; failed: number; pending: number };
+}
+
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const key = getReadKey();
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(key ? { "x-imagent-key": key } : {}) },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const j = await res.json();
+      detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+    } catch {
+      /* not json */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return res.json() as Promise<T>;
+}

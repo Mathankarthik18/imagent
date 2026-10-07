@@ -93,6 +93,35 @@ read imagent spans.
 Streaming note: LangChain drops OpenRouter's cost on streamed calls and concatenates
 the model name across chunks; the SDK undoes the name, and the catalog prices the call.
 
+## Experiments: replay real runs with another model
+
+Changed a model to cut cost and the agent stopped behaving? Instead of re-running it by
+hand and eyeballing tool calls, outputs, time and cost:
+
+1. **Compare** — tick two runs in Traces → All runs → *Compare*: tool calls aligned
+   (same / different args / missing / extra), final outputs side by side, cost & latency deltas.
+2. **Experiments** — pick recorded runs of an agent, the models to try and repeats.
+   imagent sends jobs to a **runner inside your app** (outbound polling only), which
+   re-runs the *real* agent with the new model while every tool call is answered from
+   the original run's recorded output — nothing executes, nothing is written. Each
+   replay is scored against its original: *match / partial / diverged / failed*, tool
+   match %, output similarity, missing tools, cost and time vs baseline.
+
+```python
+# in the app, inside its event loop
+imagent.register_agent("email_orchestrator", replay_fn, source_root="bosun_orchestrator",
+                       models=["openrouter/z-ai/glm-5.3-flash", ...])
+asyncio.create_task(imagent.runner.run_forever())
+```
+
+`replay_fn(job)` rebuilds and runs the agent with `job.model`, `job.messages` (the
+recorded conversation) and `job.thread_id`; return the final answer. Tool modes:
+*recorded only* (default — calls the original never made are flagged "not recorded")
+or *live reads* (tools you declare `read_tools` run for real; writes are always stubbed).
+Delegation tools (`task`) run normally so sub-agents use the new model too.
+Replays live in a separate `<project>/experiments` project and never inflate normal stats.
+`examples/replay_demo.py` is a runnable demo.
+
 ## Live progress
 
 The SDK reports any span still open after 1.5 s (`IMAGENT_PENDING_DELAY`) as a

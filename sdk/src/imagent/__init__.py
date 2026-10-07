@@ -13,6 +13,9 @@
 from ._context import context
 from .decorators import observe
 from .redact import default_redactor, make_redactor
+from . import runner
+from .replay import model_override
+from .runner import ReplayJob, register_agent
 from .runtime import ImagentConfig, flush, get_config, init, shutdown
 
 
@@ -24,6 +27,10 @@ def get_callback_handler():
 
 
 __all__ = [
+    "ReplayJob",
+    "model_override",
+    "register_agent",
+    "runner",
     "ImagentConfig",
     "default_redactor",
     "flush",

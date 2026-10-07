@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { EmptyWindow } from "../components/EmptyWindow";
 import { RunningStrip } from "../components/Live";
 import { Icon } from "../components/icons";
@@ -55,6 +55,16 @@ export function Traces() {
   };
 
   const live = useRunning();
+  const navigate = useNavigate();
+  const [selected, setSelected] = useState<Map<string, TraceSummary>>(new Map());
+  const toggle = (t: TraceSummary) => setSelected((m) => {
+    const n = new Map(m);
+    if (n.has(t.trace_id)) n.delete(t.trace_id);
+    else n.set(t.trace_id, t);
+    return n;
+  });
+  const picked = [...selected.values()];
+  const sameRoot = picked.length > 0 && picked.every((t) => t.name === picked[0].name);
   const facets = useQuery({ queryKey: ["facets", base], queryFn: () => api<Facets>("/api/facets", base) });
   const traces = useInfiniteQuery({
     enabled: view === "list",
@@ -117,7 +127,7 @@ export function Traces() {
         <EmptyWindow what="traces" filtered={filtered} onClear={clearFilters} />
       ) : (
         <>
-          <TraceTable items={items} active={active} running={live.byTrace} onOpen={(t, i) => { setActive(i); openPeek(t.trace_id); }} />
+          <TraceTable items={items} active={active} running={live.byTrace} selected={new Set(selected.keys())} onToggle={toggle} onOpen={(t, i) => { setActive(i); openPeek(t.trace_id); }} />
           {traces.hasNextPage && (
             <button className="w-full py-3 text-center text-ink-2 hover:text-ink" disabled={traces.isFetchingNextPage} onClick={() => traces.fetchNextPage()}>
               {traces.isFetchingNextPage ? "Loading…" : "Load more"}
@@ -126,6 +136,18 @@ export function Traces() {
         </>
       )}
 
+      {picked.length > 0 && view === "list" && (
+        <div className="fixed bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-line bg-bg px-4 py-2.5 shadow-[0_12px_32px_-8px_rgb(0_0_0/0.25)]">
+          <span className="text-[12.5px] text-ink-2">{picked.length} selected</span>
+          <button disabled={picked.length !== 2} title={picked.length !== 2 ? "Select exactly two runs" : undefined}
+            onClick={() => navigate(`/compare?a=${picked[0].trace_id}&b=${picked[1].trace_id}`)}
+            className="h-7 rounded-md border border-line px-2.5 text-[12.5px] font-medium hover:border-line-strong disabled:opacity-40">Compare</button>
+          <button disabled={!sameRoot} title={!sameRoot ? "Pick runs of the same agent" : undefined}
+            onClick={() => navigate(`/experiments?new=1&root=${encodeURIComponent(picked[0].name)}&sources=${picked.map((t) => t.trace_id).join(",")}`)}
+            className="h-7 rounded-md bg-ink px-2.5 text-[12.5px] font-medium text-bg disabled:opacity-40">Replay with another model</button>
+          <button onClick={() => setSelected(new Map())} className="text-[12.5px] text-ink-3 hover:text-ink">Clear</button>
+        </div>
+      )}
       {peekThread && !peek && (
         <ThreadPeek threadId={peekThread} project={base.project} onClose={() => set({ thread: "" })}
           onOpenTrace={(id) => set({ thread: "", peek: id })} />

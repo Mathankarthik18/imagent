@@ -13,6 +13,7 @@ import { controlCls } from "./ui";
 const NAV = [
   { to: "/", label: "Overview", icon: Icon.overview, key: "o" },
   { to: "/traces", label: "Traces", icon: Icon.traces, key: "t" },
+  { to: "/experiments", label: "Experiments", icon: Icon.experiments, key: "e" },
 ];
 
 export function Layout() {

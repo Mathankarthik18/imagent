@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import hmac
 import logging
 from contextlib import asynccontextmanager
@@ -13,9 +14,10 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
 
-from . import db, live, price_sync, queries, stitch
+from . import compare, db, experiments, live, price_sync, queries, stitch
 from . import pricing
 from .config import settings
 from .ingest import decode_request, split_rows
@@ -223,6 +225,96 @@ async def api_prices() -> dict:
     return {"catalog_models": pricing.catalog_size(), "source": settings.price_source}
 
 
+# ── compare & experiments ────────────────────────────────────────────────────
+@app.get("/api/compare", dependencies=read)
+async def api_compare(a: str, b: str) -> dict:
+    """Side-by-side diff of two runs (A = baseline, B = candidate)."""
+    a_spans, b_spans = await queries.get_trace(a.lower()), await queries.get_trace(b.lower())
+    if not a_spans or not b_spans:
+        raise HTTPException(status_code=404, detail="trace not found")
+    return {"a": a.lower(), "b": b.lower(), **compare.compare(a_spans, b_spans)}
+
+
+class ExperimentIn(BaseModel):
+    name: str = ""
+    agent: str
+    project: str = ""
+    source_trace_ids: list[str] = Field(min_length=1, max_length=200)
+    variants: list[dict] = Field(min_length=1, max_length=10)
+    repeats: int = Field(1, ge=1, le=10)
+    tool_mode: str = Field("recorded", pattern="^(recorded|live_reads)$")
+
+
+@app.get("/api/experiments", dependencies=read)
+async def api_experiments() -> list[dict]:
+    return await experiments.list_experiments()
+
+
+@app.post("/api/experiments", dependencies=read)
+async def api_create_experiment(body: ExperimentIn) -> dict:
+    for v in body.variants:
+        if not str(v.get("name", "")).strip():
+            raise HTTPException(status_code=422, detail="every variant needs a name")
+    if not any(r for r in experiments.runners() if any(a["name"] == body.agent for a in r["agents"])):
+        raise HTTPException(status_code=409, detail=f"No connected runner has agent '{body.agent}' registered")
+    name = body.name or f"{body.agent}: " + " vs ".join(v["name"] for v in body.variants)
+    return await experiments.create(name=name, agent=body.agent, project=body.project,
+                                    source_trace_ids=[t.lower() for t in body.source_trace_ids],
+                                    variants=body.variants, repeats=body.repeats, tool_mode=body.tool_mode)
+
+
+@app.get("/api/experiments/sources", dependencies=read)
+async def api_experiment_sources(root_name: str, project: str | None = None, limit: int = Query(20, ge=1, le=100)) -> list[dict]:
+    return await experiments.recent_sources(project or None, root_name, limit)
+
+
+@app.get("/api/experiments/{exp_id}", dependencies=read)
+async def api_experiment(exp_id: str) -> dict:
+    d = await experiments.detail(exp_id)
+    if d is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    return d
+
+
+@app.post("/api/experiments/{exp_id}/cancel", dependencies=read)
+async def api_cancel_experiment(exp_id: str) -> dict:
+    return {"cancelled": await experiments.cancel(exp_id)}
+
+
+@app.get("/api/runners", dependencies=read)
+async def api_runners() -> list[dict]:
+    return experiments.runners()
+
+
+class ClaimIn(BaseModel):
+    runner_id: str
+    host: str = ""
+    agents: list[dict] = []
+
+
+class CompleteIn(BaseModel):
+    job_id: str
+    trace_id: str = ""
+    status: str = "ok"
+    error: str = ""
+    output: str = ""
+
+
+@app.post("/api/runner/claim", dependencies=[Depends(require_ingest)])
+async def api_runner_claim(body: ClaimIn) -> Response:
+    """Runners (imagent SDK inside the app) poll here; 204 = nothing to do."""
+    job = await experiments.claim(body.runner_id, body.agents, body.host)
+    if job is None:
+        return Response(status_code=204)
+    return Response(content=json.dumps(job, default=str), media_type="application/json")
+
+
+@app.post("/api/runner/complete", dependencies=[Depends(require_ingest)])
+async def api_runner_complete(body: CompleteIn) -> dict:
+    await experiments.complete(body.job_id, trace_id=body.trace_id, status=body.status, error=body.error, output=body.output)
+    return {"ok": True}
+
+
 @app.get("/api/stats", dependencies=read)
 async def api_stats(f: F) -> dict:
     return await queries.stats(f)
@@ -230,7 +322,13 @@ async def api_stats(f: F) -> dict:
 
 # ── UI (built SPA) ───────────────────────────────────────────────────────────
 if (settings.ui_dir / "index.html").exists():
-    app.mount("/assets", StaticFiles(directory=settings.ui_dir / "assets"), name="assets")
+    class _ImmutableAssets(StaticFiles):
+        async def get_response(self, path, scope):  # content-hashed file names → safe to cache forever
+            resp = await super().get_response(path, scope)
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            return resp
+
+    app.mount("/assets", _ImmutableAssets(directory=settings.ui_dir / "assets"), name="assets")
 
     @app.get("/{path:path}", include_in_schema=False)
     async def spa(path: str) -> FileResponse:
@@ -239,4 +337,5 @@ if (settings.ui_dir / "index.html").exists():
         candidate = (settings.ui_dir / path).resolve()
         if path and candidate.is_file() and settings.ui_dir.resolve() in candidate.parents:
             return FileResponse(candidate)
-        return FileResponse(settings.ui_dir / "index.html")
+        # The page must always be fresh so a rebuild shows up on a normal reload.
+        return FileResponse(settings.ui_dir / "index.html", headers={"Cache-Control": "no-cache, must-revalidate"})

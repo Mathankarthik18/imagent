@@ -13,6 +13,7 @@ function Svg({ size = 16, children, ...rest }: P) {
 
 export const Icon = {
   overview: (p: P) => <Svg {...p}><path d="M2.5 13.5h11M4.5 11V7M8 11V3.5M11.5 11V8.5" /></Svg>,
+  experiments: (p: P) => <Svg {...p}><path d="M6 2.5h4M6.5 2.5v4L3 12.6A.9.9 0 0 0 3.8 14h8.4a.9.9 0 0 0 .8-1.4L9.5 6.5v-4M4.6 10h6.8" /></Svg>,
   traces: (p: P) => <Svg {...p}><path d="M2.5 4h11M5 8h8.5M7.5 12h6" /></Svg>,
   threads: (p: P) => <Svg {...p}><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z" /></Svg>,
   search: (p: P) => <Svg {...p}><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></Svg>,
@@ -30,23 +31,24 @@ export const Icon = {
   check: (p: P) => <Svg {...p}><path d="m3.5 8.5 3 3 6-7" /></Svg>,
 };
 
-// Span kinds: one glyph each, tinted lightly so the list stays calm.
+// Span kinds: one glyph each (Lucide shapes, 24-unit grid), tinted lightly so the list stays calm.
 const KIND: Record<string, { path: ReactNode; color: string; label: string }> = {
-  agent: { label: "Agent", color: "text-[#2a78d6] dark:text-[#6da7ec]", path: <path d="M8 1.75 13.5 4.9v6.2L8 14.25 2.5 11.1V4.9z" /> },
-  node: { label: "Node", color: "text-ink-3", path: <rect x="3" y="3" width="10" height="10" rx="2" /> },
-  chain: { label: "Chain", color: "text-ink-3", path: <path d="M6.5 9.5l3-3M5.2 7.6 4 8.8a2.4 2.4 0 0 0 3.4 3.4l1.2-1.2M10.8 8.4 12 7.2a2.4 2.4 0 0 0-3.4-3.4L7.4 5" /> },
-  llm: { label: "LLM", color: "text-[#0f8a5f] dark:text-[#4cc79a]", path: <path d="M8 2.25 9.45 6.55 13.75 8 9.45 9.45 8 13.75 6.55 9.45 2.25 8l4.3-1.45z" /> },
-  tool: { label: "Tool", color: "text-[#c2541f] dark:text-[#ef9a6e]", path: <path d="M10.4 2.6a3 3 0 0 0-3.7 3.9L2.9 10.3a1.3 1.3 0 0 0 1.8 1.8l3.8-3.8a3 3 0 0 0 3.9-3.7l-1.7 1.7-1.5-.3-.3-1.5z" /> },
-  retriever: { label: "Retriever", color: "text-[#a93a66] dark:text-[#ec8fb2]", path: <><circle cx="7" cy="7" r="3.75" /><path d="m9.75 9.75 3.5 3.5" /></> },
-  embedding: { label: "Embedding", color: "text-[#a93a66] dark:text-[#ec8fb2]", path: <path d="M3 8h10M8 3v10" /> },
-  span: { label: "Span", color: "text-ink-3", path: <circle cx="8" cy="8" r="3" /> },
+  agent: { label: "Agent", color: "text-[#2a78d6] dark:text-[#6da7ec]", path: <><path d="M12 8V4H8" /><rect x="4" y="8" width="16" height="12" rx="2" /><path d="M2 14h2M20 14h2M15 13v2M9 13v2" /></> },
+  node: { label: "Node", color: "text-ink-3", path: <rect x="4" y="4" width="16" height="16" rx="3" /> },
+  chain: { label: "Chain", color: "text-ink-3", path: <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></> },
+  llm: { label: "LLM", color: "text-[#0f8a5f] dark:text-[#4cc79a]", path: <><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.13-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.13a.5.5 0 0 1 .96 0l1.58 6.13a2 2 0 0 0 1.44 1.44l6.13 1.58a.5.5 0 0 1 0 .96l-6.13 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.13a.5.5 0 0 1-.96 0z" /><path d="M20 3v4M22 5h-4" /></> },
+  tool: { label: "Tool", color: "text-[#c2541f] dark:text-[#ef9a6e]", path: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z" /> },
+  retriever: { label: "Retriever", color: "text-[#a93a66] dark:text-[#ec8fb2]", path: <><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></> },
+  embedding: { label: "Embedding", color: "text-[#a93a66] dark:text-[#ec8fb2]", path: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></> },
+  span: { label: "Span", color: "text-ink-3", path: <circle cx="12" cy="12" r="4" /> },
 };
 
 export function KindIcon({ kind, size = 14, className = "" }: { kind: string; size?: number; className?: string }) {
   const k = KIND[kind] ?? KIND.span;
   return (
     <span className={`inline-flex shrink-0 ${k.color} ${className}`} title={k.label}>
-      <Svg size={size}>{k.path}</Svg>
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={size >= 16 ? 1.75 : 2}
+        strokeLinecap="round" strokeLinejoin="round" aria-hidden>{k.path}</svg>
     </span>
   );
 }

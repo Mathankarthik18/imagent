@@ -1,11 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { api, type Span } from "../lib/api";
 import { fmtCost, fmtDuration, fmtNum, parseTime } from "../lib/format";
 import { useHotkey } from "../lib/keys";
+import { FlowView } from "./FlowView";
+import { NowPlaying, PlayerBar, usePlayer } from "./Replay";
+import { SpanTree } from "./SpanTree";
+import { StepsTree } from "./StepsTree";
 import { LiveDot } from "./Live";
 import { SpanPanel } from "./SpanPanel";
-import { SpanTree } from "./SpanTree";
 import { Split } from "./Split";
 import { ErrorBox, Panel, Spinner } from "./ui";
 
@@ -17,6 +20,8 @@ export function useTrace(traceId: string) {
     refetchInterval: (query) => (query.state.data?.running ? 3_000 : false),
   });
 }
+
+const EMPTY: Span[] = [];
 
 export function traceStats(spans: Span[]) {
   const ids = new Set(spans.map((s) => s.span_id));
@@ -42,6 +47,10 @@ export function TraceView({ traceId, selected, onSelect, splitId = "trace", heig
   traceId: string; selected: string | null; onSelect: (spanId: string) => void; splitId?: string; height?: string;
 }) {
   const q = useTrace(traceId);
+  const player = usePlayer(q.data?.spans ?? EMPTY);
+  const [main, setMain] = useState<"flow" | "steps">("flow");
+  // Space toggles play/pause while replaying.
+  useHotkey(" ", (e) => { if (player.on) { e.preventDefault(); if (player.playing) player.pause(); else player.play(); } });
   const order = useRef<string[]>([]);
   const setOrder = useCallback((ids: string[]) => { order.current = ids; }, []);
 
@@ -65,6 +74,10 @@ export function TraceView({ traceId, selected, onSelect, splitId = "trace", heig
   return (
     <div className="space-y-3">
       <div className="num flex flex-wrap items-center gap-x-5 gap-y-1 text-[12.5px] text-ink-3">
+        {!player.on && (
+          <button onClick={() => { setMain("flow"); player.start(); }} title="Play the run back as it happened"
+            className="inline-flex h-7 items-center gap-1.5 rounded-md bg-ink px-2.5 text-[12px] font-medium text-bg">▶ Replay</button>
+        )}
         <span><span className="text-ink">{fmtDuration(stats.duration)}</span> {stats.running ? "so far" : "total"}</span>
         <span><span className="text-ink">{spans.length}</span> spans</span>
         <span><span className="text-ink">{stats.llm}</span> LLM · <span className="text-ink">{stats.tools}</span> tool calls</span>
@@ -72,11 +85,31 @@ export function TraceView({ traceId, selected, onSelect, splitId = "trace", heig
         <span><span className="text-ink">{fmtCost(stats.cost)}</span></span>
         {stats.running && <span className="inline-flex items-center gap-1.5 text-accent"><LiveDot /> running · updates every 3s</span>}
         {stats.failed > 0 && <span className="text-critical">{stats.failed} failed span{stats.failed > 1 ? "s" : ""}</span>}
-        <span className="ml-auto hidden lg:inline"><kbd>[</kbd> <kbd>]</kbd> step spans</span>
+        <span className="ml-auto hidden lg:inline"><kbd>[</kbd> <kbd>]</kbd> step through</span>
       </div>
-      <Split id={splitId} height={height}
-        left={<Panel className="h-full overflow-hidden"><SpanTree spans={spans} selectedId={span.span_id} onSelect={(s) => onSelect(s.span_id)} onOrder={setOrder} /></Panel>}
-        right={<SpanPanel span={span} />} />
+      <Split id={`${splitId}-flow`} initial={56}
+        height={player.on ? `calc(${height} - 66px)` : height}
+        left={<Panel className="flex h-full flex-col overflow-hidden">
+          {main === "steps" && !player.on ? (
+            <>
+              <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-3">
+                <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-3">Steps</span>
+                <span className="text-[12px] text-ink-3">· full tree with timings</span>
+                <button onClick={() => setMain("flow")} className="ml-auto rounded px-2 py-0.5 text-[12px] text-ink-2 hover:bg-subtle hover:text-ink">← Back to flow</button>
+              </div>
+              <div className="min-h-0 flex-1"><SpanTree spans={spans} selectedId={span.span_id} onSelect={(s) => onSelect(s.span_id)} onOrder={setOrder} /></div>
+            </>
+          ) : <FlowView spans={spans} selectedId={span.span_id} onSelect={(s) => onSelect(s.span_id)} player={player} />}
+        </Panel>}
+        right={player.on ? <NowPlaying player={player} spans={spans} /> : main === "steps" ? <SpanPanel span={span} /> : (
+          <div className="flex h-full min-h-0 flex-col gap-3">
+            <div className="min-h-0 flex-1"><SpanPanel span={span} /></div>
+            <Panel className="h-[36%] min-h-[160px] shrink-0 overflow-hidden">
+              <StepsTree spans={spans} selectedId={span.span_id} onSelect={(s) => onSelect(s.span_id)} onOrder={setOrder} onExpand={() => setMain("steps")} />
+            </Panel>
+          </div>
+        )} />
+      {player.on && <PlayerBar player={player} />}
     </div>
   );
 }

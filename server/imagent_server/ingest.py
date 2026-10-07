@@ -153,8 +153,9 @@ def split_rows(req: ExportTraceServiceRequest) -> tuple[list[list], list[list]]:
                 kind = _kind(a)
                 if a.get("imagent.pending"):
                     parent = sp.parent_span_id.hex()
+                    thread = str(a.get("imagent.thread_id") or "")
                     running.append([
-                        project, sp.trace_id.hex(), sp.span_id.hex(), parent,
+                        f"{project}/experiments" if thread.startswith("experiment:") else project, sp.trace_id.hex(), sp.span_id.hex(), parent,
                         1 if (a.get("imagent.root") if "imagent.root" in a else not parent) else 0,
                         sp.name, kind, _ts(sp.start_time_unix_nano),
                         str(a.get("imagent.thread_id") or ""), str(a.get("imagent.user_id") or ""),
@@ -181,8 +182,9 @@ def split_rows(req: ExportTraceServiceRequest) -> tuple[list[list], list[list]]:
                 events = [{"name": e.name, "time": _ts(e.time_unix_nano).isoformat(),
                            "attributes": _attrs(e.attributes)} for e in sp.events]
                 tags = a.get("imagent.tags") or []
+                thread = str(a.get("imagent.thread_id") or a.get("session.id") or "")
                 rows.append([
-                    project,
+                    f"{project}/experiments" if thread.startswith("experiment:") else project,
                     environment,
                     sp.trace_id.hex(),
                     sp.span_id.hex(),

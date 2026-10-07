@@ -40,6 +40,8 @@ export function CommandPalette() {
     const fixed: Cmd[] = [
       { id: "overview", label: "Go to Overview", hint: "g o", run: go("/") },
       { id: "traces", label: "Go to Traces", hint: "g t", run: go("/traces") },
+      { id: "experiments", label: "Go to Experiments", hint: "g e", run: go("/experiments") },
+      { id: "new-experiment", label: "New experiment (replay runs with another model)", run: go("/experiments?new=1") },
       { id: "all-runs", label: "All runs (flat list)", run: go("/traces?view=list") },
       { id: "failures", label: "Show failed runs", run: go("/traces?view=list&status=error") },
       { id: "refresh", label: "Refresh data", run: () => { refresh(); setOpen(false); } },

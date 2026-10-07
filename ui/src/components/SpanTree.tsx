@@ -149,8 +149,19 @@ function flatten(roots: Node[], collapsed: Set<string>, hideFramework: boolean):
   return out;
 }
 
-export function SpanTree({ spans, groupByTrace = false, selectedId, onSelect, onOpenTrace, onOrder, className = "" }: {
+/** Per-span diff marks for side-by-side comparison. */
+export type SpanMark = "missing" | "extra" | "args" | "not_recorded";
+
+const MARK_STYLE: Record<SpanMark, { row: string; chip: string; label: string }> = {
+  missing: { row: "bg-critical/[0.07]", chip: "bg-critical/12 text-critical", label: "missing in other run" },
+  extra: { row: "bg-accent-soft/60", chip: "bg-accent/12 text-accent", label: "extra" },
+  args: { row: "bg-[#eda100]/[0.09]", chip: "bg-[#eda100]/15 text-[#a06d00] dark:text-[#e0a526]", label: "different args" },
+  not_recorded: { row: "bg-critical/[0.07]", chip: "bg-critical/12 text-critical", label: "not recorded" },
+};
+
+export function SpanTree({ spans, groupByTrace = false, selectedId, onSelect, onOpenTrace, onOrder, className = "", marks }: {
   spans: TreeSpan[];
+  marks?: Map<string, SpanMark>;
   groupByTrace?: boolean;
   selectedId?: string;
   onSelect: (span: TreeSpan) => void;
@@ -165,7 +176,21 @@ export function SpanTree({ spans, groupByTrace = false, selectedId, onSelect, on
   // Long threads start with only the latest run expanded.
   const [collapsed, setCollapsed] = useState<Set<string>>(() =>
     groupByTrace && roots.length > 3 ? new Set(roots.slice(0, -1).map((n) => n.id)) : new Set());
-  const [hideFramework, setHideFramework] = useState(true);
+  const [hideFramework, setHideFrameworkState] = useState(() => {
+    try {
+      return localStorage.getItem("imagent.steps.framework") !== "1";
+    } catch {
+      return true;
+    }
+  });
+  const setHideFramework = (hide: boolean) => {
+    setHideFrameworkState(hide);
+    try {
+      localStorage.setItem("imagent.steps.framework", hide ? "0" : "1");
+    } catch {
+      /* storage unavailable */
+    }
+  };
   const rows = useMemo(() => flatten(roots, collapsed, hideFramework), [roots, collapsed, hideFramework]);
   const frameworkCount = useMemo(() => {
     let n = 0;
@@ -243,9 +268,10 @@ export function SpanTree({ spans, groupByTrace = false, selectedId, onSelect, on
           const isSel = s.span_id === selectedId;
           const failed = s.status === "error";
           const running = s.status === "running";
+          const mark = marks?.get(s.span_id);
           return (
             <div key={n.id} data-span-id={s.span_id} onClick={() => onSelect(s)}
-              className={`grid h-7 cursor-pointer grid-cols-[minmax(0,1fr)_minmax(110px,26%)] items-center gap-4 px-3 ${isSel ? "bg-accent-soft shadow-[inset_2px_0_0_var(--accent)]" : "hover:bg-hover"}`}>
+              className={`grid h-7 cursor-pointer grid-cols-[minmax(0,1fr)_minmax(110px,26%)] items-center gap-4 px-3 ${isSel ? "bg-accent-soft shadow-[inset_2px_0_0_var(--accent)]" : `${mark ? MARK_STYLE[mark].row : ""} hover:bg-hover`}`}>
               <div className="flex min-w-0 items-center gap-1.5" style={{ paddingLeft: n.depth * 16 }}>
                 {hasKids ? (
                   <button className="flex size-4 shrink-0 items-center justify-center text-ink-3 hover:text-ink" aria-label={isOpen ? "Collapse" : "Expand"}
@@ -256,6 +282,7 @@ export function SpanTree({ spans, groupByTrace = false, selectedId, onSelect, on
                 <KindIcon kind={s.kind} size={13} />
                 <span className={`truncate ${failed ? "text-critical" : s.kind === "node" || s.kind === "chain" ? "text-ink-2" : "text-ink"}`}>{s.name}</span>
                 {running && <span className="shrink-0 text-[11.5px] text-accent">running</span>}
+                {mark && <span className={`shrink-0 rounded px-1 text-[10.5px] font-medium ${MARK_STYLE[mark].chip}`}>{MARK_STYLE[mark].label}</span>}
                 {s.kind === "llm" && s.input_tokens + s.output_tokens > 0 && (
                   <span className="num shrink-0 text-[11.5px] text-ink-3">{fmtNum(s.input_tokens + s.output_tokens)}</span>
                 )}
