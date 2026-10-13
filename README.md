@@ -31,8 +31,13 @@ another model — judged for answer quality, not just "did it behave the same".
 - **Built on OpenTelemetry.** GenAI semantic conventions in, nothing locked in — spans can go to SigNoz or Jaeger too.
 - **Made for agents.** Sub-agents, tool calls, middleware and model swaps are first-class, not an afterthought.
 
+### ▶ See it in action
+
+> *"Can I switch my agent to a cheaper model?"* — trace a run, replay it, try the cheaper model on real runs, and see what changed. (68 s)
+
 <p align="center">
-  <img src="docs/assets/trace-flow.png" alt="A trace in imagent: the run as a flow canvas with its steps tree and payloads" width="100%" />
+  <a href="docs/assets/demo.mp4"><img src="docs/assets/demo.gif" alt="imagent demo: traces, replay, blueprint, and an experiment comparing a cheaper model against real runs" width="100%" /></a>
+  <br /><sub><a href="docs/assets/demo.mp4">Watch in full quality (MP4)</a></sub>
 </p>
 
 ## ✦ Features
