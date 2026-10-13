@@ -1,100 +1,122 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { NewExperiment } from "../components/NewExperiment";
+import { bestByQuality, ConnectionBanner, fmtRate, matchRate, QualityBar, QLABEL, useConnection, VerdictBar } from "../components/ExperimentBits";
 import { Time } from "../components/Time";
-import { Empty, ErrorBox, PageHeader, rowCls, Spinner, td, th } from "../components/ui";
-import { api, type ExperimentSummary, type Runner } from "../lib/api";
+import { Empty, ErrorBox, framedTable, PageHeader, Spinner, th } from "../components/ui";
+import { api, type ExperimentSummary } from "../lib/api";
+import { fmtCost } from "../lib/format";
+import { pp } from "../lib/project";
+import { useAppState } from "../lib/state";
+import { Icon } from "../components/icons";
 
 export function Experiments() {
+  const { project } = useAppState();
   const navigate = useNavigate();
-  const [params, setParams] = useSearchParams();
-  const [open, setOpen] = useState(params.get("new") === "1");
-  const preselected = (params.get("sources") ?? "").split(",").filter(Boolean);
+  const [params] = useSearchParams();
+  const newExperiment = () => navigate(pp("/experiments/new"));
+  // Old links (?new=1&sources=…) open the New experiment page.
+  useEffect(() => {
+    if (params.get("new") === "1") {
+      const next = new URLSearchParams(params);
+      next.delete("new");
+      navigate(pp(`/experiments/new?${next}`), { replace: true });
+    }
+  }, [params, navigate]);
   const exps = useQuery({
-    queryKey: ["experiments"], queryFn: () => api<ExperimentSummary[]>("/api/experiments"),
+    queryKey: ["experiments", project], queryFn: () => api<ExperimentSummary[]>("/api/experiments", { project }),
     refetchInterval: (q) => ((q.state.data ?? []).some((e) => e.jobs.pending > 0) ? 3000 : 15000),
   });
-  const runners = useQuery({ queryKey: ["runners"], queryFn: () => api<Runner[]>("/api/runners"), refetchInterval: 5000 });
+  const conn = useConnection(project);
 
   return (
     <>
-      <PageHeader title="Experiments" meta="Replay real runs with other models and compare">
-        <button onClick={() => setOpen(true)} className="h-7 rounded-md bg-ink px-3 text-[12.5px] font-medium text-bg">New experiment</button>
+      <PageHeader title="Experiments" meta="Replay real runs with other models and see which does better">
+        <button onClick={newExperiment} className="h-7 rounded-md bg-ink px-3 text-[12.5px] font-medium text-bg">New experiment</button>
       </PageHeader>
 
-      <RunnerStatus runners={runners.data ?? []} loading={runners.isPending} />
+      {!conn.loading && <div className="mb-5"><ConnectionBanner state={conn.state} hosts={conn.runners.map((r) => r.host)} /></div>}
 
       {exps.isError ? <ErrorBox error={exps.error} /> : exps.isPending ? <Spinner /> : (exps.data ?? []).length === 0 ? (
         <Empty title="No experiments yet"
-          hint="Pick recorded runs of an agent, choose the models to try, and imagent replays them inside your app with the original tool outputs — then scores each against the original."
-          action={<button onClick={() => setOpen(true)} className="text-accent hover:underline">Start one</button>} />
+          hint={<>Pick recorded runs, choose a model — for the whole run or for single agents on the blueprint — and imagent replays them
+            inside your app with the original tool outputs, then scores each against the original.</>}
+          action={<button onClick={newExperiment} className="text-accent hover:underline">Start one</button>} />
       ) : (
-        <table className="w-full border-separate border-spacing-0">
-          <thead>
-            <tr>
-              <th className={th}>Experiment</th>
-              <th className={th}>Models</th>
-              <th className={`${th} text-right`}>Runs</th>
-              <th className={th}>Progress</th>
-              <th className={`${th} pr-4 text-right`}>Started</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(exps.data ?? []).map((e) => {
-              const pct = e.jobs.total ? (e.jobs.done + e.jobs.failed) / e.jobs.total : 0;
-              return (
-                <tr key={e.id} className={rowCls(false)} onClick={() => navigate(`/experiments/${e.id}`)}>
-                  <td className={`${td} max-w-0 w-[40%]`}>
-                    <div className="truncate font-medium">{e.name}</div>
-                    <div className="truncate text-[12px] text-ink-3">{e.agent} · {e.tool_mode === "recorded" ? "recorded tools" : "live reads"}</div>
-                  </td>
-                  <td className={`${td} max-w-60 truncate font-mono text-[12px] text-ink-2`}>{e.variants.join(", ")}</td>
-                  <td className={`${td} num text-right text-ink-2`}>{e.sources} × {e.variants.length}{e.repeats > 1 ? ` × ${e.repeats}` : ""}</td>
-                  <td className={`${td} w-56`}>
-                    <div className="flex items-center gap-2">
-                      <span className="h-1.5 w-24 overflow-hidden rounded-full bg-subtle">
-                        <span className={`block h-full rounded-full ${e.jobs.pending ? "bg-accent" : e.jobs.failed ? "bg-critical/70" : "bg-good"}`} style={{ width: `${pct * 100}%` }} />
-                      </span>
-                      <span className="num text-[12px] text-ink-3">
-                        {e.jobs.pending ? `${e.jobs.done + e.jobs.failed}/${e.jobs.total}` : `${e.jobs.done} done${e.jobs.failed ? ` · ${e.jobs.failed} failed` : ""}`}
-                      </span>
-                    </div>
-                  </td>
-                  <td className={`${td} pr-4 text-right text-ink-2`}><Time value={e.created_at} /></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto rounded-xl border border-line">
+          <table className={`${framedTable} min-w-[860px] text-[12.5px]`}>
+            <thead>
+              <tr>
+                <th className={`${th} pl-4`}>Experiment</th>
+                <th className={th}>Variants — answers vs original</th>
+                <th className={`${th} text-right`}>Replays</th>
+                <th className={th}>Status</th>
+                <th className={`${th} pr-4 text-right`}>Started</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(exps.data ?? []).map((e) => <ExperimentRow key={e.id} e={e} onOpen={() => navigate(pp(`/experiments/${e.id}`))} />)}
+            </tbody>
+          </table>
+        </div>
       )}
 
-      {open && <NewExperiment preselected={preselected} rootName={params.get("root") ?? undefined}
-        onClose={() => { setOpen(false); setParams(new URLSearchParams(), { replace: true }); }} />}
     </>
   );
 }
 
-function RunnerStatus({ runners, loading }: { runners: Runner[]; loading: boolean }) {
-  if (loading) return null;
-  if (runners.length === 0) {
-    return (
-      <div className="mb-5 rounded-lg border border-line px-4 py-3">
-        <div className="flex items-center gap-2 font-medium"><span className="size-2 rounded-full bg-ink-3/50" /> No runner connected</div>
-        <p className="mt-1 text-ink-3">Experiments execute inside your app (real agent, recorded tools). In the app, register an agent and start the runner:</p>
-        <pre className="mt-2 overflow-auto rounded-md bg-subtle p-3 font-mono text-[12px] leading-5 text-ink-2">{`imagent.register_agent("email_orchestrator", replay_email, source_root="bosun_orchestrator")
-asyncio.create_task(imagent.runner.run_forever())`}</pre>
-      </div>
-    );
-  }
+function ExperimentRow({ e, onOpen }: { e: ExperimentSummary; onOpen: () => void }) {
+  const results = (e.results ?? []).map((r) => ({
+    name: r.name, counts: r.verdicts, total: r.total, cost: r.avg_cost, quality: r.better ?? { new: 0, tie: 0, original: 0 } }));
+  const best = bestByQuality(results);
+  const finished = e.jobs.done + e.jobs.failed;
+  const cell = "border-b border-line/70 px-3 py-2.5 align-top";
   return (
-    <div className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-line px-4 py-2.5 text-[12.5px]">
-      <span className="inline-flex items-center gap-2 font-medium"><span className="size-2 rounded-full bg-good" /> Runner connected</span>
-      {runners.map((r) => (
-        <span key={r.runner_id} className="text-ink-3">
-          {r.host} · {r.agents.map((a) => a.name).join(", ") || "no agents"}
-        </span>
-      ))}
-    </div>
+    <tr className="group cursor-pointer hover:bg-hover" onClick={onOpen}>
+      <td className={`${cell} w-[30%] max-w-0 pl-4`}>
+        <div className="truncate font-medium text-ink">{e.name}</div>
+        <div className="truncate text-[12px] text-ink-3">{e.agent} · {e.tool_mode === "recorded" ? "recorded tools"
+          : e.tool_mode === "live" ? <span className="text-critical">all tools live</span> : "live reads"}</div>
+      </td>
+      <td className={cell}>
+        <div className="space-y-1">
+          {results.map((r) => {
+            const judged = r.quality.new + r.quality.tie + r.quality.original;
+            const rate = matchRate(r.counts);
+            return (
+              <div key={r.name} className="flex items-center gap-2 text-[12px]">
+                <span className="flex w-36 min-w-0 items-center gap-1 truncate font-mono text-ink-2">
+                  {r.name === best && <span className="inline-flex text-[#eda100]" title="Best answers so far"><Icon.star size={12} className="" /></span>}{r.name}
+                </span>
+                {judged ? <QualityBar counts={r.quality} total={r.total} className="w-24 shrink-0" /> : <VerdictBar counts={r.counts} total={r.total} className="w-24 shrink-0" />}
+                <span className="num truncate text-ink-3">
+                  {judged ? `${r.quality.new} ${QLABEL.new} · ${r.quality.tie} ${QLABEL.tie} · ${r.quality.original} ${QLABEL.original}`
+                    : r.total > 0 && r.counts.failed === r.total ? <span className="text-critical">replay failed</span>
+                    : rate == null ? "—" : `not judged · ${fmtRate(rate)} same behaviour`}
+                  {r.cost ? ` · ${fmtCost(r.cost)}` : ""}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </td>
+      <td className={`${cell} num text-right text-ink-2`}>
+        {e.sources} × {e.variants.length}{e.repeats > 1 ? ` × ${e.repeats}` : ""}
+        <div className="text-[11.5px] text-ink-3">runs × variants</div>
+      </td>
+      <td className={`${cell} w-40`}>
+        {e.jobs.pending > 0 ? (
+          <span className="flex items-center gap-2 text-accent">
+            <span className="h-1.5 w-16 overflow-hidden rounded-full bg-subtle"><span className="block h-full rounded-full bg-accent" style={{ width: `${(finished / Math.max(e.jobs.total, 1)) * 100}%` }} /></span>
+            <span className="num text-[12px]">{finished}/{e.jobs.total}</span>
+          </span>
+        ) : e.jobs.failed === e.jobs.total && e.jobs.total > 0 ? (
+          <span className="text-critical">failed</span>
+        ) : (
+          <span className="num text-ink-2">{e.jobs.done} done{e.jobs.failed ? <span className="text-critical"> · {e.jobs.failed} failed</span> : ""}</span>
+        )}
+      </td>
+      <td className={`${cell} pr-4 text-right text-ink-3`}><Time value={e.created_at} /></td>
+    </tr>
   );
 }

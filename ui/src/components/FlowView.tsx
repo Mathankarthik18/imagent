@@ -9,7 +9,7 @@ export type FlowSpan = Pick<Span, "span_id" | "parent_span_id" | "trace_id" | "n
 import { fmtCost, fmtDuration, fmtNum, parseTime } from "../lib/format";
 import { elapsed, useNow } from "../lib/live";
 import { useAppState } from "../lib/state";
-import { Icon, KindIcon } from "./icons";
+import { FRAMEWORK_TOOLS, Icon, KindIcon } from "./icons";
 import type { Player } from "./Replay";
 
 /** One box on the canvas: an LLM call, a tool call, or a nested agent. */
@@ -91,7 +91,7 @@ function columns(steps: Step[]): Step[][] {
 }
 
 /** Visual role of a node: the run's main agent, a sub-agent, or a step inside an agent. */
-type Role = "main" | "sub" | "llm" | "tool" | "other";
+export type Role = "main" | "sub" | "llm" | "tool" | "other";
 
 export type FlowDir = "TB" | "LR";
 /** Replay playback: where a step is at the current playback time. */
@@ -101,14 +101,14 @@ type StepNodeData = { step: Step; role: Role; selected: boolean; running: boolea
 
 /** Icon tile per role — the only colour on a card; the card itself stays neutral. */
 const TILE: Record<Role, { tile: string; kind: string; label: string }> = {
-  main: { tile: "bg-[#2a78d6] text-white dark:bg-[#3987e5]", kind: "agent", label: "Main agent" },
-  sub: { tile: "bg-[#4a3aa7]/12 text-[#4a3aa7] dark:bg-[#9085e9]/20 dark:text-[#c3bcf5]", kind: "agent", label: "Sub-agent" },
+  main: { tile: "bg-[#cc4a1a] text-white dark:bg-[#e8572a]", kind: "agent", label: "Main agent" },
+  sub: { tile: "bg-[#4a3aa7]/12 text-[#4a3aa7] dark:bg-[#9085e9]/20 dark:text-[#c3bcf5]", kind: "subagent", label: "Sub-agent" },
   llm: { tile: "bg-[#1baf7a]/12 text-[#12855c] dark:bg-[#1baf7a]/20 dark:text-[#4fd1a0]", kind: "llm", label: "LLM call" },
-  tool: { tile: "bg-[#eb6834]/12 text-[#c24f1f] dark:bg-[#eb6834]/20 dark:text-[#f59366]", kind: "tool", label: "Tool" },
-  other: { tile: "bg-subtle text-ink-3", kind: "span", label: "Step" },
+  tool: { tile: "bg-[#3a6fc4]/12 text-[#2a62c4] dark:bg-[#3a6fc4]/25 dark:text-[#8db4f2]", kind: "tool", label: "Tool" },
+  other: { tile: "bg-subtle text-ink-3", kind: "framework", label: "Framework" },
 };
 
-function Tile({ role, size = 32 }: { role: Role; size?: number }) {
+export function Tile({ role, size = 32 }: { role: Role; size?: number }) {
   const t = TILE[role];
   return (
     <span className={`flex shrink-0 items-center justify-center rounded-lg ${t.tile}`} style={{ width: size, height: size }}>
@@ -128,7 +128,7 @@ export function FlowLegend() {
 }
 
 /** Edges attach to invisible handles so cards keep a clean outline. */
-const HANDLE = "!size-1.5 !min-h-0 !min-w-0 !border-0 !bg-transparent";
+export const HANDLE = "!size-1.5 !min-h-0 !min-w-0 !border-0 !bg-transparent";
 
 function StepNode({ data }: NodeProps<Node<StepNodeData>>) {
   const { step, role, selected, running, now, onOpen, isRoot } = data;
@@ -137,7 +137,7 @@ function StepNode({ data }: NodeProps<Node<StepNodeData>>) {
   const agentish = role === "main" || role === "sub";
   // A sub-agent reached through a tool is named after the agent it runs, not the tool.
   const title = step.kind === "llm" ? (s.model || s.name) : role === "sub" && step.subScope && step.kind === "tool" ? step.subScope.name : s.name;
-  const border = failed ? "border-critical/70" : running || selected ? "border-accent" : role === "main" ? "border-[#2a78d6]/50" : "border-line-strong";
+  const border = failed ? "border-critical/70" : running || selected ? "border-accent" : role === "main" ? "border-[#cc4a1a]/50" : "border-line-strong";
   return (
     <div className={`flex items-center gap-2.5 rounded-xl border bg-bg px-2.5 shadow-[0_1px_2px_rgb(0_0_0/0.06)] transition-[opacity,filter,box-shadow] duration-300 ${border} ${selected ? "shadow-[0_0_0_3px_var(--accent-soft)]" : ""} ${running ? "animate-pulse shadow-[0_0_0_4px_var(--accent-soft)]" : ""} ${data.phase === "pending" ? "opacity-30 grayscale" : ""}`}
       style={{ width: NODE_W, height: NODE_H }}
@@ -242,7 +242,7 @@ export function FlowView({ spans, selectedId, onSelect, player }: {
     if (step.kind === "agent") return runIds.has(step.span.span_id) && (header || !scope) ? "main" : "sub";
     if (step.kind === "tool" && step.subScope) return "sub";
     if (step.kind === "llm") return "llm";
-    if (step.kind === "tool") return "tool";
+    if (step.kind === "tool") return FRAMEWORK_TOOLS.has(step.span.name) ? "other" : "tool";
     return "other";
   };
 

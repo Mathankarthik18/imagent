@@ -145,7 +145,10 @@ export function CopyId({ value, display, className = "text-[12px] text-ink-2" }:
 
 /** Table header cell / row helpers so every list shares one rhythm. */
 export const th = "sticky top-0 z-[1] h-8 bg-bg px-3 text-left text-[11.5px] font-medium text-ink-3 border-b border-line whitespace-nowrap";
-export const td = "px-3 py-2 align-middle";
+// Row dividers sit on the cells: with border-separate tables a <tr> border isn't drawn.
+export const td = "px-3 py-2.5 align-middle border-b border-line/70";
+/** Framed table: drop the last row's divider so it doesn't double the frame's border. */
+export const framedTable = "w-full border-separate border-spacing-0 [&>tbody>tr:last-child>td]:border-b-0";
 export function rowCls(active: boolean) {
-  return `group cursor-pointer border-b border-line/70 ${active ? "bg-accent-soft/60 shadow-[inset_2px_0_0_var(--accent)]" : "hover:bg-hover"}`;
+  return `group cursor-pointer ${active ? "bg-accent-soft/60 shadow-[inset_2px_0_0_var(--accent)]" : "hover:bg-hover"}`;
 }

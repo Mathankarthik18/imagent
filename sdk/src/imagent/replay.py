@@ -47,7 +47,10 @@ def canonical_args(args: Any) -> str:
 
 @dataclass
 class ReplayState:
-    model: str = ""
+    model: str = ""                             # every LLM call (unless the agent has its own)
+    models: dict[str, str] = field(default_factory=dict)   # agent name → model
+    root_agent: str = ""                        # the agent being replayed — owner of unlabelled LLM calls
+    swapped: dict[tuple[int, str], Any] = field(default_factory=dict)
     tool_mode: str = "recorded"                 # recorded | live_reads
     passthrough: set[str] = field(default_factory=set)
     read_tools: set[str] = field(default_factory=set)
@@ -57,7 +60,11 @@ class ReplayState:
 
     @classmethod
     def from_job(cls, job: dict[str, Any], *, passthrough: set[str], read_tools: set[str]) -> ReplayState:
-        st = cls(model=str((job.get("variant") or {}).get("model") or ""), tool_mode=job.get("tool_mode", "recorded"),
+        variant = job.get("variant") or {}
+        models = variant.get("models") if isinstance(variant.get("models"), dict) else {}
+        st = cls(model=str(variant.get("model") or ""), models={k: str(v) for k, v in models.items() if v},
+                 root_agent=str(job.get("agent") or ""),
+                 tool_mode=job.get("tool_mode", "recorded"),
                  passthrough=set(passthrough), read_tools=set(read_tools))
         for f in job.get("fixtures") or []:
             st.recorded[(f["name"], canonical_args(f.get("args", "")))].append(f)
@@ -67,6 +74,8 @@ class ReplayState:
         """→ (mode, recorded fixture or None)."""
         if name in self.passthrough:
             return "passthrough", None
+        if self.tool_mode == "live":  # full access: every tool runs for real (reads and writes)
+            return "live", None
         with self.lock:
             q = self.recorded.get((name, canonical_args(args)))
             fixture = q.popleft() if q else None
@@ -169,8 +178,71 @@ def install() -> None:
 
         BaseTool.ainvoke = ainvoke  # type: ignore[method-assign]
         BaseTool.invoke = invoke  # type: ignore[method-assign]
+        _install_model_swap()
         _installed = True
         logger.info("imagent replay hooks installed")
+
+
+# ── model swap ────────────────────────────────────────────────────────────────
+_NAME_FIELDS = ("model_name", "model", "model_id")
+
+
+def model_name_of(model: Any) -> str:
+    for f in _NAME_FIELDS:
+        v = getattr(model, f, None)
+        if isinstance(v, str) and v:
+            return v
+    return ""
+
+
+def target_model(st: ReplayState, run_manager: Any) -> str:
+    """The experiment's model for this LLM call: the calling agent's pick, else the run-wide one."""
+    # create_agent / deepagents label each call with its agent; a plain graph's calls are the replayed agent's.
+    agent = ((getattr(run_manager, "metadata", None) or {}).get("lc_agent_name") or "") if run_manager else ""
+    return st.models.get(agent or st.root_agent) or st.model
+
+
+def provider_model_id(model: Any, name: str) -> str:
+    """Apps often write "openrouter/vendor/model" and strip the router prefix in their own
+    model factory; a client already pointed at OpenRouter must get "vendor/model"."""
+    base = str(getattr(model, "openai_api_base", None) or getattr(model, "base_url", None) or "")
+    if name.startswith("openrouter/") and "openrouter.ai" in base:
+        return name[len("openrouter/"):]
+    return name
+
+
+def swapped(st: ReplayState, model: Any, name: str) -> Any:
+    """A copy of ``model`` asking for ``name`` (same provider, keys and settings)."""
+    key = (id(model), name)
+    if key not in st.swapped:
+        fields = getattr(type(model), "model_fields", {})
+        field_ = next((f for f in _NAME_FIELDS if f in fields), None)
+        # A model we can't rename (custom class) is left alone — the app may pick it itself from job.model.
+        st.swapped[key] = model.model_copy(update={field_: provider_model_id(model, name)}) if field_ else model
+    return st.swapped[key]
+
+
+def _install_model_swap() -> None:
+    from langchain_core.language_models.chat_models import BaseChatModel
+
+    orig_a, orig_s = BaseChatModel._agenerate_with_cache, BaseChatModel._generate_with_cache
+
+    async def agen(self, messages, stop=None, run_manager=None, **kwargs):
+        st = _state.get()
+        name = target_model(st, run_manager) if st else ""
+        if name and name != model_name_of(self):
+            return await orig_a(swapped(st, self, name), messages, stop, run_manager, **kwargs)
+        return await orig_a(self, messages, stop, run_manager, **kwargs)
+
+    def gen(self, messages, stop=None, run_manager=None, **kwargs):
+        st = _state.get()
+        name = target_model(st, run_manager) if st else ""
+        if name and name != model_name_of(self):
+            return orig_s(swapped(st, self, name), messages, stop, run_manager, **kwargs)
+        return orig_s(self, messages, stop, run_manager, **kwargs)
+
+    BaseChatModel._agenerate_with_cache = agen  # type: ignore[method-assign]
+    BaseChatModel._generate_with_cache = gen  # type: ignore[method-assign]
 
 
 class activate:

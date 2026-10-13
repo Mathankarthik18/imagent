@@ -31,12 +31,39 @@ from .serialize import dumps
 logger = logging.getLogger("imagent")
 
 
+_dotenv: dict[str, str] | None = None
+
+
+def _dotenv_vars() -> dict[str, str]:
+    """IMAGENT_* lines from ./.env — many apps load .env into their own settings object
+    (pydantic-settings) rather than the process environment, so read it ourselves."""
+    global _dotenv
+    if _dotenv is None:
+        _dotenv = {}
+        try:
+            with open(os.path.join(os.getcwd(), ".env"), encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("export "):
+                        line = line[7:].lstrip()
+                    if line.startswith(("IMAGENT_", "HARNESS_")) and "=" in line:
+                        k, v = line.split("=", 1)
+                        v = v.split(" #", 1)[0].strip()
+                        _dotenv[k.strip()] = v[1:-1] if len(v) > 1 and v[0] == v[-1] and v[0] in "'\"" else v
+        except OSError:
+            pass
+    return _dotenv
+
+
 def _env(name: str, default: str | None = None) -> str | None:
-    """IMAGENT_<name>, falling back to the pre-rename HARNESS_<name>."""
-    v = os.getenv(f"IMAGENT_{name}")
-    if v is None:
-        v = os.getenv(f"HARNESS_{name}")
-    return default if v is None else v
+    """IMAGENT_<name> from the environment, then ./.env; pre-rename HARNESS_<name> still works."""
+    for key in (f"IMAGENT_{name}", f"HARNESS_{name}"):
+        v = os.getenv(key)
+        if v is None:
+            v = _dotenv_vars().get(key)
+        if v is not None:
+            return v
+    return default
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -56,6 +83,8 @@ class ImagentConfig:
     redact: Redactor | None = default_redactor
     sample_rate: float = 1.0
     auto_instrument_langchain: bool = True
+    # Publish each LangGraph agent's blueprint on its first run (IMAGENT_AUTO_BLUEPRINT=false to stop).
+    auto_blueprint: bool = True
     # Extra OTLP/HTTP trace endpoints (e.g. a SigNoz collector) that also get imagent spans.
     extra_otlp_endpoints: list[str] = field(default_factory=list)
     # Exporters added verbatim — mostly for tests (InMemorySpanExporter).
@@ -167,6 +196,15 @@ def init(
             install()
         except ImportError:
             logger.debug("langchain-core not installed; skipping auto-instrumentation")
+    from . import experiments
+    from .blueprint import install_auto
+
+    publish = cfg.auto_blueprint and _env("AUTO_BLUEPRINT", "true").lower() not in {"0", "false", "no"}
+    if experiments.enabled():
+        experiments.start()  # IMAGENT_EXPERIMENTS=true: replay any agent the app runs
+    if publish or experiments.enabled():
+        install_auto(publish=publish)
+    experiments._run_startup_builds()  # @imagent.agent builders declared before init()
     logger.info("imagent tracing → %s (service=%s)", cfg.endpoint, cfg.service)
     return cfg
 

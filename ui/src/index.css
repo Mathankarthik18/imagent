@@ -15,11 +15,13 @@
   --text: #171717;
   --text-2: #585856;
   --text-3: #91908c;
-  --accent: #2a78d6;
-  --accent-soft: #2a78d61a;
-  --series-1: #2a78d6;
-  --series-2: #eb6834;
-  --critical: #d03b3b;
+  /* Ember (design/brand): the accent is darkened for text contrast on white; the brand node uses the pure ember. */
+  --accent: #cc4a1a;
+  --accent-soft: #cc4a1a1a;
+  --brand-accent: #ff5b2e;
+  --series-1: #cc4a1a;
+  --series-2: #3a6fc4;
+  --critical: #c8304e;
   --good: #0ca30c;
   --grid: #f0f0ee;
   --surface: #ffffff;
@@ -36,11 +38,12 @@
   --text: #ececec;
   --text-2: #a1a1a0;
   --text-3: #6f6f6d;
-  --accent: #3987e5;
-  --accent-soft: #3987e526;
-  --series-1: #3987e5;
-  --series-2: #d95926;
-  --critical: #e66767;
+  --accent: #ff6b3d;
+  --accent-soft: #ff6b3d26;
+  --brand-accent: #ff5b2e;
+  --series-1: #ff6b3d;
+  --series-2: #6f9ae8;
+  --critical: #f0607a;
   --good: #0ca30c;
   --grid: #1c1c1c;
   --surface: #131313;

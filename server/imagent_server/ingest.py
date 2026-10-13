@@ -134,18 +134,24 @@ def _kind(a: dict[str, Any]) -> str:
     return "span"
 
 
-def span_rows(req: ExportTraceServiceRequest) -> list[list]:
-    return split_rows(req)[0]
+def span_rows(req: ExportTraceServiceRequest, project: str | None = None) -> list[list]:
+    return split_rows(req, project)[0]
 
 
-def split_rows(req: ExportTraceServiceRequest) -> tuple[list[list], list[list]]:
+def split_rows(req: ExportTraceServiceRequest, project: str | None = None) -> tuple[list[list], list[list]]:
     """(finished span rows, running-span rows). Running rows are SDK "started"
-    snapshots (``imagent.pending``) and go to the running_spans table."""
+    snapshots (``imagent.pending``) and go to the running_spans table.
+
+    ``project`` comes from the project API key; without one (legacy server-wide key)
+    the project is the app's service.name. Experiment replays (thread "experiment:…")
+    stay in their project with origin='experiment'."""
+    forced = project
     rows: list[list] = []
     running: list[list] = []
     for rs in req.resource_spans:
         res = _attrs(rs.resource.attributes)
-        project = str(res.get("service.name") or "default")
+        service = str(res.get("service.name") or "default")
+        project = forced or service
         environment = str(res.get("deployment.environment") or res.get("deployment.environment.name") or "")
         for ss in rs.scope_spans:
             for sp in ss.spans:
@@ -155,12 +161,13 @@ def split_rows(req: ExportTraceServiceRequest) -> tuple[list[list], list[list]]:
                     parent = sp.parent_span_id.hex()
                     thread = str(a.get("imagent.thread_id") or "")
                     running.append([
-                        f"{project}/experiments" if thread.startswith("experiment:") else project, sp.trace_id.hex(), sp.span_id.hex(), parent,
+                        project, sp.trace_id.hex(), sp.span_id.hex(), parent,
                         1 if (a.get("imagent.root") if "imagent.root" in a else not parent) else 0,
                         sp.name, kind, _ts(sp.start_time_unix_nano),
                         str(a.get("imagent.thread_id") or ""), str(a.get("imagent.user_id") or ""),
                         str(a.get("gen_ai.agent.name") or ""),
                         str(a.get("gen_ai.response.model") or a.get("gen_ai.request.model") or ""),
+                        "experiment" if thread.startswith("experiment:") else "", service,
                     ])
                     continue
                 start_ns, end_ns = sp.start_time_unix_nano, sp.end_time_unix_nano or sp.start_time_unix_nano
@@ -184,7 +191,7 @@ def split_rows(req: ExportTraceServiceRequest) -> tuple[list[list], list[list]]:
                 tags = a.get("imagent.tags") or []
                 thread = str(a.get("imagent.thread_id") or a.get("session.id") or "")
                 rows.append([
-                    f"{project}/experiments" if thread.startswith("experiment:") else project,
+                    project,
                     environment,
                     sp.trace_id.hex(),
                     sp.span_id.hex(),
@@ -216,5 +223,7 @@ def split_rows(req: ExportTraceServiceRequest) -> tuple[list[list], list[list]]:
                     _str(a.get("imagent.metadata")),
                     {k: _str(v) for k, v in a.items() if k not in _LIFTED},
                     json.dumps(events, default=str) if events else "",
+                    "experiment" if thread.startswith("experiment:") else "",
+                    service,
                 ])
     return rows, running

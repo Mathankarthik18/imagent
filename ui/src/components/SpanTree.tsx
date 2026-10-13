@@ -46,7 +46,7 @@ interface Node {
 
 // Bars stay neutral; only model and tool time get colour, so the expensive parts pop.
 const BAR_COLOR: Record<string, string> = {
-  llm: "bg-[#1baf7a]/80", tool: "bg-[#eb6834]/75", retriever: "bg-[#e87ba4]/75", embedding: "bg-[#e87ba4]/75",
+  llm: "bg-[#1baf7a]/80", tool: "bg-[#3a6fc4]/75", retriever: "bg-[#e87ba4]/75", embedding: "bg-[#e87ba4]/75",
   agent: "bg-ink-3/45", node: "bg-ink-3/35", chain: "bg-ink-3/35", span: "bg-ink-3/35", trace: "bg-ink-3/45",
 };
 
@@ -279,7 +279,7 @@ export function SpanTree({ spans, groupByTrace = false, selectedId, onSelect, on
                     <Icon.chevronRight size={12} className={`transition-transform ${isOpen ? "rotate-90" : ""}`} />
                   </button>
                 ) : <span className="size-4 shrink-0" />}
-                <KindIcon kind={s.kind} size={13} />
+                <KindIcon kind={s.kind} name={s.name} size={13} />
                 <span className={`truncate ${failed ? "text-critical" : s.kind === "node" || s.kind === "chain" ? "text-ink-2" : "text-ink"}`}>{s.name}</span>
                 {running && <span className="shrink-0 text-[11.5px] text-accent">running</span>}
                 {mark && <span className={`shrink-0 rounded px-1 text-[10.5px] font-medium ${MARK_STYLE[mark].chip}`}>{MARK_STYLE[mark].label}</span>}

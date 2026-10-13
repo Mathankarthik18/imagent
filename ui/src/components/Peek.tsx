@@ -7,13 +7,14 @@ import { KindIcon } from "./icons";
 import { ThreadTreePanel } from "./ThreadTree";
 import { traceStats, TraceView, useTrace } from "./TraceView";
 import { CopyId } from "./ui";
+import { pp } from "../lib/project";
 
 export function TracePeek({ traceId, onClose }: { traceId: string; onClose: () => void }) {
   const [span, setSpan] = useState<string | null>(null);
   const q = useTrace(traceId);
   const root = q.data?.spans.length ? traceStats(q.data.spans).root : null;
   return (
-    <Drawer onClose={onClose} href={`/traces/${traceId}${span ? `?span=${span}` : ""}`}
+    <Drawer onClose={onClose} href={pp(`/traces/${traceId}${span ? `?span=${span}` : ""}`)}
       title={<span className="flex min-w-0 items-center gap-2">
         {root && <KindIcon kind={root.kind} size={14} />}
         <span className="truncate">{root?.name ?? "Trace"}</span>
@@ -32,7 +33,7 @@ export function ThreadPeek({ threadId, project, onClose, onOpenTrace }: {
     queryFn: () => api<ThreadDetailSummary>(`/api/threads/${encodeURIComponent(threadId)}/summary`, { project }),
   }).data?.summary;
   return (
-    <Drawer onClose={onClose} href={`/threads/${encodeURIComponent(threadId)}`}
+    <Drawer onClose={onClose} href={pp(`/threads/${encodeURIComponent(threadId)}`)}
       title={<span className="flex min-w-0 items-center gap-2"><span className="text-ink-3">Thread</span><span className="truncate font-mono text-[12.5px]">{threadId}</span></span>}>
       {s && (
         <div className="num mb-3 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-ink-3">

@@ -9,11 +9,14 @@ import { SpanPanel } from "./SpanPanel";
 import { SpanTree, type SpanMark } from "./SpanTree";
 import { traceStats, useTrace } from "./TraceView";
 import { Empty, ErrorBox, Panel, Section, Segmented, Spinner } from "./ui";
+import { pp } from "../lib/project";
+import { Icon } from "./icons";
 
 export const VERDICT: Record<Verdict, { label: string; cls: string; dot: string }> = {
-  match: { label: "Matches baseline", cls: "text-good", dot: "bg-good" },
-  partial: { label: "Partly matches", cls: "text-[#b77d00] dark:text-[#e0a526]", dot: "bg-[#eda100]" },
-  diverged: { label: "Diverged", cls: "text-critical", dot: "bg-critical" },
+  // Behaviour vs the original run — not quality: a different answer can be the better one.
+  match: { label: "Same behaviour", cls: "text-ink-2", dot: "bg-ink-3" },
+  partial: { label: "Partly different", cls: "text-ink-2", dot: "bg-ink-3/60" },
+  diverged: { label: "Different", cls: "text-ink-2", dot: "bg-ink-3/30" },
   failed: { label: "Failed", cls: "text-critical", dot: "bg-critical" },
 };
 
@@ -59,14 +62,19 @@ function MetricsTable({ a, b, labels }: { a: RunMetrics; b: RunMetrics; labels: 
         </tr>
       </thead>
       <tbody>
-        {rows.map(([label, x, y, fmt, lower]) => (
-          <tr key={label}>
-            <td className="border-b border-line/70 py-1.5 text-ink-2">{label}</td>
-            <td className="num border-b border-line/70 py-1.5 text-right">{fmt(x)}</td>
-            <td className="num border-b border-line/70 py-1.5 text-right">{fmt(y)}</td>
-            <td className="num border-b border-line/70 py-1.5 pl-3 text-right">{delta(x, y, fmt, lower)}</td>
-          </tr>
-        ))}
+        {rows.map(([label, x, y, fmt, lower]) => {
+          // A $0 cost next to tokens used means the model has no known price — not that it was free.
+          const unpriced = label === "Cost" && (!x || !y);
+          const show = (v: number) => (label === "Cost" && !v ? <span className="text-ink-3">not priced</span> : fmt(v));
+          return (
+            <tr key={label}>
+              <td className="border-b border-line/70 py-1.5 text-ink-2">{label}</td>
+              <td className="num border-b border-line/70 py-1.5 text-right">{show(x)}</td>
+              <td className="num border-b border-line/70 py-1.5 text-right">{show(y)}</td>
+              <td className="num border-b border-line/70 py-1.5 pl-3 text-right">{unpriced ? <span className="text-ink-3">—</span> : delta(x, y, fmt, lower)}</td>
+            </tr>
+          );
+        })}
         <tr>
           <td className="py-1.5 text-ink-2">Models</td>
           <td className="py-1.5 text-right font-mono text-[11.5px] text-ink-2">{a.models.join(", ") || "—"}</td>
@@ -149,8 +157,8 @@ export function CompareView({ a, b, labels = ["Baseline", "Candidate"] }: { a: s
         {c.missing_tools.length > 0 && <span className="text-critical">Missing: {c.missing_tools.join(", ")}</span>}
         {c.extra_tools.length > 0 && <span className="text-accent">Extra: {c.extra_tools.join(", ")}</span>}
         <span className="ml-auto flex gap-3 text-[12px]">
-          <Link to={`/traces/${c.a}`} className="text-ink-3 hover:text-ink">{labels[0]} trace ↗</Link>
-          <Link to={`/traces/${c.b}`} className="text-ink-3 hover:text-ink">{labels[1]} trace ↗</Link>
+          <Link to={pp(`/traces/${c.a}`)} className="text-ink-3 hover:text-ink">{labels[0]} trace<Icon.external size={11} className="ml-0.5 inline-block align-[-1px]" /></Link>
+          <Link to={pp(`/traces/${c.b}`)} className="text-ink-3 hover:text-ink">{labels[1]} trace<Icon.external size={11} className="ml-0.5 inline-block align-[-1px]" /></Link>
         </span>
       </div>
 

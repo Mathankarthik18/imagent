@@ -9,6 +9,7 @@ import { ErrorBox, PageHeader, Section, Spinner, StatStrip, td, th } from "../co
 import { api, type Stats } from "../lib/api";
 import { fmtCost, fmtDuration, fmtNum, fmtPct, parseTime } from "../lib/format";
 import { useAppState, useBaseParams } from "../lib/state";
+import { pp } from "../lib/project";
 
 export function Dashboard() {
   const base = useBaseParams();
@@ -19,7 +20,7 @@ export function Dashboard() {
   if (q.isError) return <ErrorBox error={q.error} />;
   if (q.isPending) return <Spinner />;
   const { summary: s, series, by_model, by_agent, by_tool, errors, bucket_seconds } = q.data;
-  if (!s.traces) return <><PageHeader title="Overview" /><RunningStrip onOpen={(r) => navigate(`/traces/${r.trace_id}`)} /><EmptyWindow what="traces" /></>;
+  if (!s.traces) return <><PageHeader title="Overview" /><RunningStrip onOpen={(r) => navigate(pp(`/traces/${r.trace_id}`))} /><EmptyWindow what="traces" /></>;
 
   const multiDay = bucket_seconds >= 6 * 3600;
   const fmtTick = (t: string) => {
@@ -35,7 +36,7 @@ export function Dashboard() {
   return (
     <div className="space-y-8">
       <PageHeader title="Overview" meta={rangeLabel} />
-      <RunningStrip onOpen={(r) => navigate(`/traces/${r.trace_id}`)} />
+      <RunningStrip onOpen={(r) => navigate(pp(`/traces/${r.trace_id}`))} />
 
       <StatStrip items={[
         { label: "Traces", value: fmtNum(s.traces), sub: `${fmtNum(s.llm_calls)} LLM · ${fmtNum(s.tool_calls)} tool calls` },
@@ -100,7 +101,7 @@ export function Dashboard() {
         </Section>
         <Section title="Agents">
           <Table head={["Agent", "Traces", "LLM", "Tools", "Run p95", "Failed", "Cost"]}
-            onRow={(i) => by_agent[i].agent !== "(none)" && navigate(`/traces?agent=${encodeURIComponent(by_agent[i].agent)}`)}
+            onRow={(i) => by_agent[i].agent !== "(none)" && navigate(pp(`/traces?agent=${encodeURIComponent(by_agent[i].agent)}`))}
             rows={by_agent.map((a) => [
               a.agent === "(none)" ? <span className="text-ink-3" key="a">unattributed</span> : a.agent,
               fmtNum(a.traces), fmtNum(a.llm_calls), fmtNum(a.tool_calls), fmtDuration(a.p95_ms),
@@ -119,7 +120,7 @@ export function Dashboard() {
           {errors.length === 0 ? <p className="border-t border-line py-3 text-ink-3">No failures in this window.</p> : (
             <ul className="border-t border-line">
               {errors.map((e, i) => (
-                <li key={i} onClick={() => navigate(`/traces/${e.sample_trace_id}`)} className="cursor-pointer border-b border-line/70 py-2.5 hover:bg-hover">
+                <li key={i} onClick={() => navigate(pp(`/traces/${e.sample_trace_id}`))} className="cursor-pointer border-b border-line/70 py-2.5 hover:bg-hover">
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="truncate font-medium">{e.name}</span>
                     <span className="num shrink-0 text-[12px] text-ink-3">{e.count}× · <Time value={e.last_seen} /></span>

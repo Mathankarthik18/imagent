@@ -14,6 +14,8 @@ import { api, ApiError, type Page, type ThreadDetailSummary, type TraceSummary }
 import { turnInput, turnOutput, type Turn } from "../lib/conversation";
 import { fmtCost, fmtDuration, fmtNum, fmtPct, fmtTime } from "../lib/format";
 import { useAppState } from "../lib/state";
+import { pp } from "../lib/project";
+import { Icon } from "../components/icons";
 
 export function ThreadDetail() {
   const { threadId = "" } = useParams();
@@ -54,7 +56,7 @@ export function ThreadDetail() {
     <div className="space-y-8">
       <div>
         <nav className="mb-2 flex items-center gap-1.5 text-[12.5px] text-ink-3">
-          <Link to="/traces" className="hover:text-ink">Traces</Link><span>/</span><span>Thread</span>
+          <Link to={pp("/traces")} className="hover:text-ink">Traces</Link><span>/</span><span>Thread</span>
         </nav>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <h1 className="min-w-0 truncate"><CopyId value={threadId} display={threadId} className="text-[14px] font-medium text-ink" /></h1>
@@ -145,7 +147,7 @@ function TurnRow({ index, trace: t, mode, onOpen }: { index: number; trace: Trac
           <Message who="in" turn={input} />
           {t.error_count > 0 && (
             <div className="flex items-start gap-2 font-mono text-[12px] leading-5 text-critical">
-              <span>✕</span><span className="min-w-0 flex-1">{t.error_message || `${t.error_count} span(s) failed`}</span>
+              <Icon.x size={14} className="mt-px shrink-0" /><span className="min-w-0 flex-1">{t.error_message || `${t.error_count} span(s) failed`}</span>
               <button onClick={onOpen} className="shrink-0 font-sans text-ink-3 hover:text-ink">Inspect</button>
             </div>
           )}
@@ -164,7 +166,7 @@ function Message({ who, turn }: { who: "in" | "out"; turn: Turn }) {
   const label = who === "in" ? (turn.isMessage ? "User" : "Input") : (turn.isMessage ? "Assistant" : "Output");
   return (
     <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-3">
-      <span className={`pt-px text-[12px] ${who === "in" ? "text-[#2a78d6] dark:text-[#6da7ec]" : "text-[#0f8a5f] dark:text-[#4cc79a]"}`}>{label}</span>
+      <span className={`pt-px text-[12px] ${who === "in" ? "text-ink" : "text-[#0f8a5f] dark:text-[#4cc79a]"}`}>{label}</span>
       <div>
         {!turn.text ? <span className="text-ink-3">Not captured</span>
           : turn.isMessage ? <CollapsibleMarkdown text={turn.text} maxHeight={320} />

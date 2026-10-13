@@ -3,6 +3,7 @@ import { KindIcon } from "../components/icons";
 import { Time } from "../components/Time";
 import { traceStats, TraceView, useTrace } from "../components/TraceView";
 import { CopyId } from "../components/ui";
+import { pp } from "../lib/project";
 
 export function TraceDetail() {
   const { traceId = "" } = useParams();
@@ -19,7 +20,7 @@ export function TraceDetail() {
   return (
     <div>
       <nav className="mb-2 flex items-center gap-1.5 text-[12.5px] text-ink-3">
-        <Link to="/traces" className="hover:text-ink">Traces</Link>
+        <Link to={pp("/traces")} className="hover:text-ink">Traces</Link>
         <span>/</span>
         <CopyId value={traceId} display={traceId.slice(0, 12)} />
       </nav>
@@ -31,7 +32,7 @@ export function TraceDetail() {
             <Time value={root.start_time} />
             <span>{root.project}{root.environment ? ` · ${root.environment}` : ""}</span>
             {root.thread_id && (
-              <Link to={`/threads/${encodeURIComponent(root.thread_id)}`} className="font-mono text-[12px] hover:text-ink">
+              <Link to={pp(`/threads/${encodeURIComponent(root.thread_id)}`)} className="font-mono text-[12px] hover:text-ink">
                 thread {root.thread_id.length > 20 ? `${root.thread_id.slice(0, 20)}…` : root.thread_id}
               </Link>
             )}
@@ -39,7 +40,7 @@ export function TraceDetail() {
           </span>
         )}
         {root && (
-          <Link to={`/experiments?new=1&root=${encodeURIComponent(root.name)}&sources=${traceId}`}
+          <Link to={pp(`/experiments/new?root=${encodeURIComponent(root.name)}&sources=${traceId}`)}
             className="ml-auto inline-flex h-7 items-center rounded-md border border-line px-2.5 text-[12.5px] text-ink-2 hover:border-line-strong hover:text-ink">
             Replay with another model
           </Link>

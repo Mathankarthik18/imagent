@@ -1,0 +1,405 @@
+"""Blueprint: the structure of an AI application, read from the agent framework itself.
+
+Automatic: after ``imagent.init()``, the first run of each LangGraph agent publishes its
+blueprint (``install_auto``). To publish without running it: ``imagent.publish_blueprint(agent)``.
+
+imagent then shows the app as a canvas: main agent → sub-agents (nested), each with its
+model, system prompt, tools, middleware and LangGraph nodes — including parts that have
+never run yet — with live stats from traces layered on top.
+
+Nothing here runs the agent; it only reads the compiled graph. Introspection is
+best-effort (framework internals are not a public API): anything it can't read is
+left out rather than raising.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import threading
+from typing import Any
+
+logger = logging.getLogger("imagent")
+
+SCHEMA_VERSION = 1
+MAX_PROMPT_CHARS = 60_000
+MAX_DESC_CHARS = 2_000
+MAX_DEPTH = 6
+# Tools deepagents adds to every agent (filesystem + planning + delegation).
+DEEPAGENTS_BUILTIN_TOOLS = {"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute",
+                            "write_todos", "task"}
+
+
+def _cells(fn: Any) -> dict[str, Any]:
+    """Closure variables of a function, by name."""
+    code, closure = getattr(fn, "__code__", None), getattr(fn, "__closure__", None)
+    if code is None or not closure:
+        return {}
+    out = {}
+    for name, cell in zip(code.co_freevars, closure):
+        try:
+            out[name] = cell.cell_contents
+        except ValueError:
+            pass
+    return out
+
+
+def _walk_closures(root: Any, max_depth: int = 5):
+    """Every object reachable through nested closures (and functools.partial / bound methods)."""
+    seen: set[int] = set()
+    stack = [(root, 0)]
+    while stack:
+        obj, depth = stack.pop()
+        if id(obj) in seen or depth > max_depth:
+            continue
+        seen.add(id(obj))
+        yield obj
+        targets: list[Any] = []
+        for attr in ("func", "afunc", "coroutine", "__func__", "__self__"):
+            try:
+                v = getattr(obj, attr, None)
+            except Exception:  # noqa: BLE001
+                v = None
+            if v is not None and v is not obj:
+                targets.append(v)
+        targets.extend(_cells(obj).values())
+        if isinstance(obj, (list, tuple)) and depth < max_depth:
+            targets.extend(obj[:200])
+        for t in targets:
+            if t is not None and not isinstance(t, (str, bytes, int, float, bool)):
+                stack.append((t, depth + 1))
+
+
+def _trim(s: Any, n: int) -> str:
+    s = "" if s is None else str(s)
+    return s if len(s) <= n else s[:n] + f"\n… ({len(s) - n:,} more characters)"
+
+
+def _text(msg: Any) -> str:
+    content = getattr(msg, "content", msg)
+    if isinstance(content, list):
+        return "\n".join(str(b.get("text", "")) if isinstance(b, dict) else str(b) for b in content)
+    return "" if content is None else str(content)
+
+
+def describe_model(model: Any) -> dict[str, Any] | None:
+    if model is None:
+        return None
+    if isinstance(model, str):
+        return {"name": model, "class": "", "provider": model.split(":", 1)[0] if ":" in model else ""}
+    name = (getattr(model, "model_name", None) or getattr(model, "model", None) or getattr(model, "model_id", None)
+            or getattr(model, "deployment_name", None) or "")
+    cls = type(model).__name__
+    provider = ""
+    try:
+        provider = model._llm_type  # noqa: SLF001 — LangChain's own provider id
+    except Exception:  # noqa: BLE001
+        pass
+    params = {}
+    for k in ("temperature", "max_tokens", "max_completion_tokens", "streaming", "disable_streaming", "timeout", "max_retries"):
+        v = getattr(model, k, None)
+        if v is not None and isinstance(v, (int, float, str, bool)):
+            params[k] = v
+    base_url = getattr(model, "openai_api_base", None) or getattr(model, "base_url", None)
+    if base_url:
+        params["base_url"] = str(base_url)
+    return {"name": str(name), "class": cls, "provider": str(provider), "params": params}
+
+
+def describe_tool(tool: Any) -> dict[str, Any]:
+    name = str(getattr(tool, "name", "") or getattr(tool, "__name__", ""))
+    args: list[str] = []
+    try:
+        args = list((getattr(tool, "args", None) or {}).keys())
+    except Exception:  # noqa: BLE001
+        pass
+    return {"name": name, "description": _trim(getattr(tool, "description", ""), MAX_DESC_CHARS), "args": args,
+            "builtin": name in DEEPAGENTS_BUILTIN_TOOLS}
+
+
+def _middleware_name(m: Any) -> str:
+    return str(getattr(m, "name", None) or type(m).__name__)
+
+
+def describe_agent(agent: Any, name: str | None = None, *, description: str = "", _depth: int = 0) -> dict[str, Any]:
+    """Describe one compiled agent graph (recursing into sub-agents)."""
+    out: dict[str, Any] = {"name": name or getattr(agent, "name", None) or "agent", "description": description,
+                           "model": None, "system_prompt": "", "tools": [], "middleware": [], "subagents": [],
+                           "graph": {"nodes": [], "edges": []}}
+    nodes = getattr(agent, "nodes", {}) or {}
+
+    # LangGraph structure: nodes + edges (middleware hooks show up as "Name.hook" nodes).
+    try:
+        g = agent.get_graph()
+        for nid in g.nodes:
+            typ = ("start" if nid == "__start__" else "end" if nid == "__end__" else "model" if nid == "model"
+                   else "tools" if nid == "tools" else "middleware" if "." in nid else "node")
+            out["graph"]["nodes"].append({"id": nid, "type": typ})
+        out["graph"]["edges"] = [{"source": e.source, "target": e.target, "conditional": bool(e.conditional)} for e in g.edges]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("blueprint: graph of %s unreadable: %s", out["name"], exc)
+
+    # Model, system prompt and middleware chain live in the model node's closure (langchain create_agent).
+    model_node = nodes.get("model")
+    bound = getattr(model_node, "bound", None)
+    if bound is not None:
+        cells: dict[str, Any] = {}
+        for attr in ("func", "afunc"):
+            cells.update(_cells(getattr(bound, attr, None)))
+        out["model"] = describe_model(cells.get("model"))
+        sm = cells.get("system_message") or cells.get("system_prompt")
+        if sm is not None:
+            out["system_prompt"] = _trim(_text(sm), MAX_PROMPT_CHARS)
+        try:
+            from langchain.agents.middleware import AgentMiddleware  # type: ignore[import-not-found]
+        except Exception:  # noqa: BLE001
+            AgentMiddleware = None  # type: ignore[assignment]
+        mw: dict[str, dict[str, Any]] = {}
+        if AgentMiddleware is not None:
+            # wrap_model_call / wrap_tool_call middleware never become graph nodes — they sit
+            # inside the composed handlers of the model and tool nodes.
+            roots = [bound, getattr(nodes.get("tools"), "bound", None)]
+            for obj in (o for r in roots if r is not None for o in _walk_closures(r, max_depth=10)):
+                if isinstance(obj, AgentMiddleware):
+                    mw.setdefault(_middleware_name(obj), {"name": _middleware_name(obj), "class": type(obj).__name__,
+                                                          "module": type(obj).__module__, "hooks": []})
+        for n in out["graph"]["nodes"]:  # hooks that became graph nodes
+            if n["type"] == "middleware":
+                mname, hook = n["id"].split(".", 1)
+                mw.setdefault(mname, {"name": mname, "class": mname, "module": "", "hooks": []})["hooks"].append(hook)
+        out["middleware"] = list(mw.values())
+
+    # Tools; deepagents' `task` tool carries the compiled sub-agent graphs.
+    tool_node = getattr(nodes.get("tools"), "bound", None)
+    tools_by_name = getattr(tool_node, "tools_by_name", {}) or {}
+    out["tools"] = [describe_tool(t) for t in tools_by_name.values()]
+    task = tools_by_name.get("task")
+    if task is not None and _depth < MAX_DEPTH:
+        graphs, specs = {}, {}
+        for obj in _walk_closures(task, max_depth=6):
+            if isinstance(obj, dict) and obj:
+                vals = list(obj.values())
+                if all(hasattr(v, "get_graph") for v in vals):
+                    graphs.update(obj)
+                elif all(isinstance(v, dict) and "description" in v for v in vals):
+                    specs.update(obj)
+                elif {"name", "description"} <= set(obj) and isinstance(obj.get("name"), str):
+                    specs[obj["name"]] = obj
+        for sub_name, sub_graph in graphs.items():
+            spec = specs.get(sub_name) or {}
+            sub = describe_agent(sub_graph, sub_name, description=_trim(spec.get("description", ""), MAX_DESC_CHARS),
+                                 _depth=_depth + 1)
+            if not sub["system_prompt"] and spec.get("system_prompt"):
+                sub["system_prompt"] = _trim(spec["system_prompt"], MAX_PROMPT_CHARS)
+            if sub["model"] is None and spec.get("model") is not None:
+                sub["model"] = describe_model(spec["model"])
+            out["subagents"].append(sub)
+    return out
+
+
+def _framework(desc: dict[str, Any]) -> str:
+    def any_deep(d: dict[str, Any]) -> bool:
+        return any(m.get("module", "").startswith("deepagents") for m in d["middleware"]) or any(
+            t["name"] == "task" for t in d["tools"]) or any(any_deep(s) for s in d["subagents"])
+    return "deepagents" if any_deep(desc) else "langgraph" if desc["graph"]["nodes"] else "unknown"
+
+
+def _versions() -> dict[str, str]:
+    from importlib import metadata
+
+    out = {}
+    for pkg in ("deepagents", "langgraph", "langchain", "langchain-core"):
+        try:
+            out[pkg] = metadata.version(pkg)
+        except metadata.PackageNotFoundError:
+            pass
+    return out
+
+
+def describe(agent: Any, name: str | None = None) -> dict[str, Any]:
+    """The full blueprint of an agent application (JSON-serialisable)."""
+    root = describe_agent(agent, name)
+    return {"schema": SCHEMA_VERSION, "framework": _framework(root), "versions": _versions(), "root": root}
+
+
+def publish(agent: Any, name: str | None = None, *, background: bool = True) -> dict[str, Any] | None:
+    """Describe ``agent`` and send it to imagent (no-op if imagent isn't initialised).
+
+    Runs in a background thread by default so app startup never waits on it."""
+    from .runtime import get_config
+
+    cfg = get_config()
+    if cfg is None:
+        logger.debug("blueprint not published — imagent.init() was not called")
+        return None
+
+    def send() -> dict[str, Any] | None:
+        try:
+            bp = describe(agent, name)
+            body = json.dumps(bp, default=str, ensure_ascii=False, sort_keys=True)
+            import requests  # dependency of the OTLP/HTTP exporter
+
+            headers = {"x-imagent-key": cfg.api_key} if cfg.api_key else {}
+            r = requests.post(f"{cfg.endpoint}/api/blueprints", headers=headers, timeout=30, json={
+                "project": cfg.service, "name": bp["root"]["name"], "blueprint": bp,
+                "hash": hashlib.sha256(body.encode()).hexdigest()[:16]})
+            r.raise_for_status()
+            logger.info("imagent blueprint published: %s (%d sub-agents)", bp["root"]["name"], len(bp["root"]["subagents"]))
+            return bp
+        except Exception as exc:  # noqa: BLE001 — never break the host app
+            logger.warning("imagent blueprint not published: %s", exc)
+            return None
+
+    if background:
+        threading.Thread(target=send, name="imagent-blueprint", daemon=True).start()
+        return None
+    return send()
+
+
+# ── automatic capture ─────────────────────────────────────────────────────────
+import contextvars
+
+_inside_run: contextvars.ContextVar[bool] = contextvars.ContextVar("imagent_inside_graph", default=False)
+_known: set[str] = set()   # agents already published — roots and every sub-agent inside them
+_lock = threading.Lock()
+_installed = False
+_publish = True
+
+
+def _nested() -> bool:
+    """True inside a running LangChain/LangGraph run — LangGraph hands its config to nested
+    runs through this context variable, in whatever thread the node runs."""
+    try:
+        from langchain_core.runnables.config import var_child_runnable_config
+    except ImportError:
+        return False
+    return var_child_runnable_config.get() is not None
+
+
+def publish_built(graph: Any, name: str) -> None:
+    """Publish an agent the SDK built itself (at startup) — same as its first run would."""
+    with _lock:
+        if name in _known:
+            return
+        _known.add(name)
+    bp = describe(graph, name)
+
+    def names(a: dict[str, Any]) -> list[str]:
+        return [a["name"], *(n for s in a["subagents"] for n in names(s))]
+    with _lock:
+        _known.update(names(bp["root"]))
+    _send(bp)
+
+
+def _auto(graph: Any) -> None:
+    """Publish ``graph`` the first time it runs, unless it runs inside another agent."""
+    if _inside_run.get() or _nested():
+        return
+    name = str(getattr(graph, "name", None) or "agent")
+    from . import experiments
+
+    if experiments._started:
+        experiments.capture(graph, name)
+    with _lock:
+        if name in _known:
+            return
+        _known.add(name)
+    if not _publish:
+        return
+    try:
+        bp = describe(graph, name)  # synchronous so its sub-agents are known before they run
+
+        def names(a: dict[str, Any]) -> list[str]:
+            return [a["name"], *(n for s in a["subagents"] for n in names(s))]
+        with _lock:
+            _known.update(names(bp["root"]))
+        _send(bp)
+    except Exception as exc:  # noqa: BLE001 — never break the host app
+        logger.debug("imagent auto-blueprint skipped for %s: %s", name, exc)
+
+
+def _send(bp: dict[str, Any]) -> None:
+    from .runtime import get_config
+
+    cfg = get_config()
+    if cfg is None:
+        return
+
+    def post() -> None:
+        try:
+            import requests
+
+            body = json.dumps(bp, default=str, ensure_ascii=False, sort_keys=True)
+            headers = {"x-imagent-key": cfg.api_key} if cfg.api_key else {}
+            requests.post(f"{cfg.endpoint}/api/blueprints", headers=headers, timeout=30, json={
+                "project": cfg.service, "name": bp["root"]["name"], "blueprint": bp,
+                "hash": hashlib.sha256(body.encode()).hexdigest()[:16]}).raise_for_status()
+            logger.info("imagent blueprint published: %s", bp["root"]["name"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("imagent blueprint not published: %s", exc)
+
+    threading.Thread(target=post, name="imagent-blueprint", daemon=True).start()
+
+
+def _tag(graph: Any, a: tuple, kw: dict) -> tuple[tuple, dict]:
+    """Top-level runs of an ``@imagent.agent`` build carry its build id in their metadata."""
+    if not getattr(graph, "_imagent_build", None) or _nested():
+        return a, kw
+    from . import experiments
+
+    if len(a) >= 2:  # (input, config, ...)
+        return (a[0], experiments.note_run(graph, a[1]), *a[2:]), kw
+    return a, {**kw, "config": experiments.note_run(graph, kw.get("config"))}
+
+
+def install_auto(publish: bool = True) -> None:
+    """Wrap LangGraph's run methods so every agent's first run publishes its blueprint
+    (``publish``) and becomes replayable when experiments are on."""
+    global _installed, _publish
+    _publish = publish
+    if _installed:
+        return
+    try:
+        from langgraph.pregel import Pregel
+    except ImportError:
+        return
+    import functools
+
+    def wrap_call(orig):
+        @functools.wraps(orig)
+        def run(self, *a, **kw):
+            _auto(self)
+            a, kw = _tag(self, a, kw)
+            token = _inside_run.set(True)
+            try:
+                return orig(self, *a, **kw)
+            finally:
+                _inside_run.reset(token)
+        return run
+
+    def wrap_acall(orig):
+        @functools.wraps(orig)
+        async def run(self, *a, **kw):
+            _auto(self)
+            a, kw = _tag(self, a, kw)
+            token = _inside_run.set(True)
+            try:
+                return await orig(self, *a, **kw)
+            finally:
+                _inside_run.reset(token)
+        return run
+
+    def wrap_gen(orig):
+        @functools.wraps(orig)
+        def run(self, *a, **kw):
+            _auto(self)
+            a, kw = _tag(self, a, kw)
+            return orig(self, *a, **kw)
+        return run
+
+    Pregel.invoke = wrap_call(Pregel.invoke)
+    Pregel.ainvoke = wrap_acall(Pregel.ainvoke)
+    Pregel.stream = wrap_gen(Pregel.stream)
+    Pregel.astream = wrap_gen(Pregel.astream)
+    _installed = True

@@ -145,3 +145,15 @@ async def test_runner_wrapper_span_carries_experiment_thread(spans, monkeypatch)
     done = posted["/api/runner/complete"]
     assert done["status"] == "ok" and done["output"] == "replayed ATLAS"
     assert done["trace_id"] == format(wrapper.context.trace_id, "032x")
+
+
+def test_job_model_slots_fall_back_to_variant_model_then_default():
+    from imagent.runner import ReplayJob
+
+    job = ReplayJob(job_id="j", experiment_id="e", agent="a", thread_id="t", tool_mode="recorded", source={},
+                    variant={"name": "mix", "model": "m-all", "models": {"sub_agents": "m-sub", "calc": ""}}, model="m-all")
+    assert job.models == {"sub_agents": "m-sub"}
+    assert job.model_for("sub_agents") == "m-sub"
+    assert job.model_for("orchestrator", "m-default") == "m-all"
+    job.model = ""
+    assert job.model_for("orchestrator", "m-default") == "m-default"

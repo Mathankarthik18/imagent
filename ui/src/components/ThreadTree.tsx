@@ -10,6 +10,7 @@ import { StepsTree } from "./StepsTree";
 import { Split } from "./Split";
 import { useTrace } from "./TraceView";
 import { Empty, ErrorBox, Panel, Spinner } from "./ui";
+import { Icon } from "./icons";
 
 interface ThreadSpans {
   spans: TreeSpan[];
@@ -70,7 +71,7 @@ export function ThreadTreePanel({ threadId, project, tick, onOpenTrace, height =
           <div className="flex shrink-0 items-center gap-3 border-b border-line px-3 py-1.5">
             {!player.on && (
               <button onClick={() => { setMain("flow"); player.start(); }} title="Play the thread back as it happened"
-                className="inline-flex h-7 items-center rounded-md bg-ink px-2.5 text-[12px] font-medium text-bg">▶ Replay</button>
+                className="inline-flex h-7 items-center gap-1.5 rounded-md bg-ink px-2.5 text-[12px] font-medium text-bg"><Icon.play size={11} /> Replay</button>
             )}
             {q.data.truncated && <span className="text-[12px] text-ink-3">Showing the first 5,000 spans.</span>}
             <span className="ml-auto hidden text-[11.5px] text-ink-3 lg:inline"><kbd>[</kbd> <kbd>]</kbd> step through</span>

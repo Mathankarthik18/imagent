@@ -1,160 +1,434 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, apiPost, type Runner } from "../lib/api";
+import { api, apiPost, type Blueprint, type BlueprintSummary, type BpAgent, type Runner } from "../lib/api";
+import { pp } from "../lib/project";
 import { useAppState } from "../lib/state";
+import { Tile } from "./FlowView";
 import { Icon } from "./icons";
 import { Time } from "./Time";
 import { controlCls } from "./ui";
 
 interface SourceRun { trace_id: string; project: string; start_time: string; thread_id: string; input_text: string; output_text: string }
 
-/** Dialog: pick runs to replay, the models to try, repeats and tool mode. */
-export function NewExperiment({ onClose, preselected = [], rootName }: { onClose: () => void; preselected?: string[]; rootName?: string }) {
+/** A variant: one model for every agent, or a model for chosen agents (the rest unchanged). */
+interface VariantDraft { name: string; mode: "all" | "per"; model: string; perAgent: Record<string, string> }
+interface TreeRow { name: string; depth: number; model: string; runs: number }
+
+const LETTERS = "ABCDE";
+const short = (m: string) => m.split("/").pop() ?? m;
+
+function flatten(a: BpAgent): BpAgent[] {
+  return [a, ...a.subagents.flatMap(flatten)];
+}
+
+function picks(v: VariantDraft): Record<string, string> {
+  return Object.fromEntries(Object.entries(v.perAgent).map(([a, m]) => [a, m.trim()]).filter(([a, m]) => a && m));
+}
+
+function isComplete(v: VariantDraft) {
+  return v.mode === "all" ? !!v.model.trim() : Object.keys(picks(v)).length > 0;
+}
+
+/** Default name: the model, or "<agent> → <model>" when one agent changes. */
+function autoName(v: VariantDraft, i: number) {
+  if (v.mode === "all") return short(v.model.trim());
+  const p = Object.entries(picks(v));
+  return p.length === 1 ? `${p[0][0]} → ${short(p[0][1])}` : `Variant ${LETTERS[i]}`;
+}
+
+/** New experiment page: 1 · which runs  2 · what changes  3 · options, with a sticky summary. */
+export function NewExperiment({ onClose, preselected = [], rootName, focusAgent }: {
+  onClose: () => void; preselected?: string[]; rootName?: string;
+  /** Opened from a Blueprint agent: start variant A as "choose per agent" with that agent. */
+  focusAgent?: string;
+}) {
   const { project } = useAppState();
   const navigate = useNavigate();
-  const runners = useQuery({ queryKey: ["runners"], queryFn: () => api<Runner[]>("/api/runners"), refetchInterval: 5000 });
+
+  // Agents: what connected runners offer, plus every agent with a blueprint (those queue until the app connects).
+  const runners = useQuery({ queryKey: ["runners", project], queryFn: () => api<Runner[]>("/api/runners", { project }), refetchInterval: 5000 });
+  const blueprints = useQuery({ queryKey: ["blueprints", project], queryFn: () => api<BlueprintSummary[]>("/api/blueprints", { project }) });
   const agents = useMemo(() => {
-    const seen = new Map<string, Runner["agents"][number]>();
-    for (const r of runners.data ?? []) for (const a of r.agents) seen.set(a.name, a);
+    const seen = new Map<string, Runner["agents"][number] & { connected?: boolean }>();
+    for (const b of blueprints.data ?? []) {
+      seen.set(b.name, { name: b.name, source_root: b.name, description: "", read_tools: [], models: [], connected: false, ready: false });
+    }
+    // Freshest runner last so it wins — after an app reload the old runner lingers until it goes stale.
+    const byAge = [...(runners.data ?? [])].sort((a, b) => b.seconds_ago - a.seconds_ago);
+    for (const r of byAge) for (const a of r.agents) seen.set(a.name, { ...a, ready: r.ready ?? true, connected: true });
     return [...seen.values()];
-  }, [runners.data]);
+  }, [runners.data, blueprints.data]);
   const [agentName, setAgentName] = useState("");
   const agent = agents.find((a) => a.name === agentName) ?? (rootName ? agents.find((a) => a.source_root === rootName) : agents[0]);
   useEffect(() => { if (agent && agent.name !== agentName) setAgentName(agent.name); }, [agent, agentName]);
 
+  // Step 1: runs.
   const sources = useQuery({
     enabled: !!agent,
     queryKey: ["exp-sources", agent?.source_root, project],
-    queryFn: () => api<SourceRun[]>("/api/experiments/sources", { root_name: agent!.source_root, project: project || undefined, limit: 30 }),
+    queryFn: () => api<SourceRun[]>("/api/experiments/sources", { root_name: agent!.source_root, project: project || undefined, limit: 50 }),
   });
+  // Nothing pre-selected: you pick the runs (runs chosen on the Traces page arrive selected).
   const [picked, setPicked] = useState<Set<string>>(new Set(preselected));
-  useEffect(() => {
-    if (picked.size === 0 && sources.data?.length) setPicked(new Set(sources.data.slice(0, 5).map((s) => s.trace_id)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sources.data]);
 
-  const [variants, setVariants] = useState([{ name: "", model: "" }]);
+  // Step 2: the agent's blueprint — every agent with its current model, for the per-agent picker.
+  const bp = useQuery({
+    enabled: !!agent, retry: false, queryKey: ["blueprint", project, agent?.name, "7"],
+    queryFn: () => api<Blueprint>(`/api/blueprints/${project}/${agent!.name}`, { days: 7 }),
+  });
+  const tree = useMemo((): TreeRow[] => {
+    if (!bp.data) return [];
+    const st = bp.data.stats;
+    const walk = (a: BpAgent, depth: number): TreeRow[] => {
+      const s = st[a.name];
+      const kids = [...a.subagents].sort((x, y) => ((st[y.name]?.runs ?? 0) - (st[x.name]?.runs ?? 0)) || x.name.localeCompare(y.name));
+      return [{ name: a.name, depth, model: s?.models[0]?.model || a.model?.name || "", runs: (s?.runs || s?.llm_calls) ?? 0 },
+              ...kids.flatMap((k) => walk(k, depth + 1))];
+    };
+    return walk(bp.data.blueprint.root, 0);
+  }, [bp.data]);
+  const currentModel = tree[0]?.model ?? "";
+  const modelSuggestions = useMemo(() => {
+    const s = new Set(agent?.models ?? []);
+    if (bp.data) {
+      for (const a of flatten(bp.data.blueprint.root)) if (a.model?.name) s.add(a.model.name);
+      for (const st of Object.values(bp.data.stats)) for (const m of st.models) s.add(m.model);
+    }
+    return [...s].filter(Boolean).sort();
+  }, [agent, bp.data]);
+
+  const [variants, setVariants] = useState<VariantDraft[]>([
+    focusAgent ? { name: "", mode: "per", model: "", perAgent: { [focusAgent]: "" } } : { name: "", mode: "all", model: "", perAgent: {} }]);
+  const [tab, setTab] = useState(0);
+  const setVariant = (i: number, patch: Partial<VariantDraft>) => setVariants((vs) => vs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const addVariant = () => { setVariants((vs) => [...vs, { name: "", mode: "all", model: "", perAgent: {} }]); setTab(variants.length); };
+  const removeVariant = (i: number) => { setVariants((vs) => vs.filter((_, j) => j !== i)); setTab((t) => Math.max(0, t >= i ? t - 1 : t)); };
+
+  // Step 3: options.
   const [repeats, setRepeats] = useState(1);
-  const [toolMode, setToolMode] = useState<"recorded" | "live_reads">("recorded");
+  const [toolMode, setToolMode] = useState<"recorded" | "live_reads" | "live">("recorded");
+  const [liveConfirmed, setLiveConfirmed] = useState(false);
+  const [showOptions, setShowOptions] = useState(true);
+
   const create = useMutation({
     mutationFn: () => apiPost<{ id: string }>("/api/experiments", {
       agent: agent!.name, project, source_trace_ids: [...picked], repeats, tool_mode: toolMode,
-      variants: variants.filter((v) => v.model.trim()).map((v) => ({ name: v.name.trim() || v.model.trim().split("/").pop(), model: v.model.trim() })),
+      variants: variants.map((v, i) => ({
+        name: v.name.trim() || autoName(v, i),
+        model: v.mode === "all" ? v.model.trim() : "",
+        models: v.mode === "per" ? picks(v) : {},
+      })),
     }),
-    onSuccess: (r) => { onClose(); navigate(`/experiments/${r.id}`); },
+    onSuccess: (r) => { onClose(); navigate(pp(`/experiments/${r.id}`)); },
   });
-  const validVariants = variants.filter((v) => v.model.trim()).length;
-  const jobs = picked.size * validVariants * repeats;
+
+  const incomplete = variants.findIndex((v) => !isComplete(v));
+  const problem = !agent ? "No agent to replay yet"
+    : toolMode === "live" && !liveConfirmed ? "Confirm that replays may change live data (step 3)"
+    : picked.size === 0 ? "Pick at least one run in step 1"
+    : incomplete >= 0 ? `Variant ${LETTERS[incomplete]}: ${variants[incomplete].mode === "all" ? "enter a model" : "choose a model for at least one agent"}`
+    : null;
+  const jobs = picked.size * variants.length * repeats;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/20 px-4 py-[6vh] dark:bg-black/50" onClick={onClose}>
-      <div className="w-full max-w-3xl rounded-xl border border-line bg-bg shadow-[0_24px_64px_-16px_rgb(0_0_0/0.35)]" onClick={(e) => e.stopPropagation()}>
-        <header className="flex items-center border-b border-line px-5 py-3.5">
-          <h2 className="text-[14px] font-semibold">New experiment</h2>
-          <span className="ml-2 text-ink-3">Replay real runs with another model and compare against the original</span>
-          <button onClick={onClose} className="ml-auto text-ink-3 hover:text-ink"><Icon.close size={15} /></button>
-        </header>
+    <div className="mx-auto max-w-6xl">
+      <nav className="mb-2 text-[12.5px] text-ink-3">
+        <button onClick={onClose} className="hover:text-ink">Experiments</button> /
+      </nav>
+      <h1 className="text-[15px] font-semibold tracking-[-0.01em]">New experiment</h1>
+      <p className="mb-5 text-[12.5px] text-ink-3">Re-run real runs with a different model and compare each answer with the original.</p>
 
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
+      <div className="overflow-hidden rounded-xl border border-line bg-bg">
         {agents.length === 0 ? (
           <div className="px-5 py-10 text-center">
-            <p className="font-medium">No runner connected</p>
-            <p className="mx-auto mt-1 max-w-md text-ink-3">Experiments run inside your app so they can use its real agents and tools. Register an agent and start the runner in the app, then come back.</p>
+            <p className="font-medium">No agents yet</p>
+            <p className="mx-auto mt-1 max-w-md text-ink-3">Connect your app (<span className="font-mono text-ink">imagent.init()</span>) and let it run once — its agents show up here. Experiments also need <span className="font-mono text-ink">IMAGENT_EXPERIMENTS=true</span> in the app's .env.</p>
           </div>
         ) : (
-          <div className="space-y-6 px-5 py-5">
-            <Field label="Agent">
-              <select className={`ghost ${controlCls}`} value={agent?.name ?? ""} onChange={(e) => { setAgentName(e.target.value); setPicked(new Set()); }}>
-                {agents.map((a) => <option key={a.name} value={a.name}>{a.name} — replays “{a.source_root}” runs</option>)}
-              </select>
-            </Field>
+          <div className="divide-y divide-line">
+            {agent && agent.connected === false && (
+              <Notice>Your app isn't connected for experiments right now. You can set this up — it starts when the app connects (<span className="font-mono">IMAGENT_EXPERIMENTS=true</span> in its .env, then restart).</Notice>
+            )}
+            {agent && agent.connected && agent.ready === false && (
+              <Notice>Your app is connected but hasn't run <span className="font-mono">{agent.name}</span> since it started — this starts after its next run.</Notice>
+            )}
 
-            <Field label="Runs to replay" hint={`${picked.size} selected · each is replayed with its recorded tool outputs`}>
-              <div className="max-h-64 overflow-auto rounded-md border border-line">
-                {sources.isPending ? <p className="px-3 py-4 text-ink-3">Loading runs…</p> : (sources.data ?? []).length === 0 ? (
-                  <p className="px-3 py-4 text-ink-3">No recorded “{agent?.source_root}” runs yet.</p>
-                ) : (sources.data ?? []).map((s) => (
-                  <label key={s.trace_id} className="flex cursor-pointer items-start gap-3 border-b border-line/70 px-3 py-2 last:border-0 hover:bg-hover">
-                    <input type="checkbox" className="mt-0.5 accent-[var(--accent)]" checked={picked.has(s.trace_id)}
-                      onChange={(e) => setPicked((p) => { const n = new Set(p); if (e.target.checked) n.add(s.trace_id); else n.delete(s.trace_id); return n; })} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate">{s.input_text || <span className="text-ink-3">(no readable input)</span>}</span>
-                      {s.output_text && <span className="block truncate text-[12px] text-ink-3">→ {s.output_text}</span>}
-                    </span>
-                    <span className="shrink-0 text-[12px] text-ink-3"><Time value={s.start_time} /></span>
-                  </label>
-                ))}
-              </div>
-            </Field>
+            {/* 1 · runs */}
+            <Step n={1} title="Which runs should be replayed?"
+              aside={agents.length > 1 ? (
+                <select className={`ghost ${controlCls}`} value={agent?.name ?? ""} onChange={(e) => { setAgentName(e.target.value); setPicked(new Set()); }} aria-label="Agent">
+                  {agents.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}
+                </select>
+              ) : agent && <span className="inline-flex items-center gap-1.5 text-[12.5px] text-ink-2"><Tile role="main" size={16} /> {agent.name}</span>}>
+              <RunPicker runs={sources.data ?? []} loading={sources.isPending} picked={picked} setPicked={setPicked} root={agent?.source_root} />
+            </Step>
 
-            <Field label="Models to try" hint="Each is compared against the original run (the baseline). Use your app's model id, e.g. openrouter/z-ai/glm-5.3-flash.">
-              <div className="space-y-2">
+            {/* 2 · what changes */}
+            <Step n={2} title="What should change?"
+              hint="Each variant replays every selected run. Use model ids as they appear in your traces.">
+              <div className="flex items-center gap-1 border-b border-line">
                 {variants.map((v, i) => (
-                  <div key={i} className="flex gap-2">
-                    <input className={`${controlCls} w-40`} placeholder="Label (optional)" value={v.name}
-                      onChange={(e) => setVariants((vs) => vs.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
-                    <input className={`${controlCls} flex-1 font-mono text-[12px]`} placeholder="model id" value={v.model} list="model-suggestions"
-                      onChange={(e) => setVariants((vs) => vs.map((x, j) => (j === i ? { ...x, model: e.target.value } : x)))} />
-                    {variants.length > 1 && (
-                      <button className="px-1 text-ink-3 hover:text-critical" onClick={() => setVariants((vs) => vs.filter((_, j) => j !== i))}><Icon.close size={13} /></button>
-                    )}
-                  </div>
+                  <button key={i} onClick={() => setTab(i)}
+                    className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-[12.5px] ${tab === i ? "border-ink font-medium text-ink" : "border-transparent text-ink-3 hover:text-ink-2"}`}>
+                    Variant {LETTERS[i]}
+                    {isComplete(v) ? <Icon.check size={12} className="text-good" /> : <span className="size-1.5 rounded-full bg-ink-3/40" />}
+                  </button>
                 ))}
-                <datalist id="model-suggestions">{(agent?.models ?? []).map((m) => <option key={m} value={m} />)}</datalist>
-                {variants.length < 5 && (
-                  <button className="text-[12.5px] text-accent hover:underline" onClick={() => setVariants((vs) => [...vs, { name: "", model: "" }])}>+ Add model</button>
+                {variants.length < LETTERS.length && (
+                  <button onClick={addVariant} className="ml-1 px-2 py-1.5 text-[12.5px] text-accent hover:underline">+ Add variant</button>
                 )}
               </div>
-            </Field>
+              <VariantEditor key={tab} v={variants[tab]} letter={LETTERS[tab]} index={tab} tree={tree} currentModel={currentModel}
+                onChange={(p) => setVariant(tab, p)} onRemove={variants.length > 1 ? () => removeVariant(tab) : undefined} />
+              <datalist id="model-suggestions">{modelSuggestions.map((m) => <option key={m} value={m} />)}</datalist>
+            </Step>
 
-            <div className="grid gap-6 sm:grid-cols-2">
-              <Field label="Repeats per run" hint="Models aren't deterministic — repeat to see consistency.">
-                <select className={`ghost ${controlCls}`} value={repeats} onChange={(e) => setRepeats(Number(e.target.value))}>
-                  {[1, 2, 3, 5].map((n) => <option key={n} value={n}>{n}×</option>)}
-                </select>
-              </Field>
-              <Field label="Tools during replay">
-                <div className="space-y-1.5">
-                  <Radio checked={toolMode === "recorded"} onChange={() => setToolMode("recorded")} label="Recorded outputs only"
-                    hint="Nothing executes. Calls the original never made are flagged “not recorded”." />
-                  <Radio checked={toolMode === "live_reads"} onChange={() => setToolMode("live_reads")} label="Recorded + live read-only tools"
-                    hint={agent?.read_tools.length ? `Live: ${agent.read_tools.join(", ")}. Writes are always stubbed.` : "This agent declares no read-only tools, so everything new is stubbed."} />
+            {/* 3 · options */}
+            <Step n={3} title="Options" aside={
+              <button onClick={() => setShowOptions((o) => !o)} className="text-[12.5px] text-ink-3 hover:text-ink">
+                {showOptions ? "Hide" : `${repeats}× each · ${toolMode === "recorded" ? "recorded tools" : toolMode === "live" ? "ALL TOOLS LIVE" : "live reads"} — change`}
+              </button>}>
+              {showOptions && (
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <div>
+                    <div className="mb-1.5 text-[12.5px] font-medium">Run each replay</div>
+                    <div className="inline-flex rounded-md bg-subtle p-0.5">
+                      {[1, 2, 3, 5].map((n) => (
+                        <button key={n} onClick={() => setRepeats(n)}
+                          className={`h-6 rounded-[5px] px-2.5 text-[12px] font-medium ${repeats === n ? "bg-bg text-ink shadow-[0_0_0_1px_var(--border)]" : "text-ink-3"}`}>{n}×</button>
+                      ))}
+                    </div>
+                    <p className="mt-1.5 text-[12px] text-ink-3">Models aren't deterministic — repeat to see how consistent they are.</p>
+                  </div>
+                  <div>
+                    <div className="mb-1.5 text-[12.5px] font-medium">Tools during the replay</div>
+                    <Radio checked={toolMode === "recorded"} onChange={() => setToolMode("recorded")} label="Use the recorded results"
+                      hint="Nothing executes. Calls the original never made are flagged." />
+                    <Radio checked={toolMode === "live_reads"} onChange={() => setToolMode("live_reads")} label="Also run read-only tools live"
+                      hint={agent?.read_tools.length ? `Live: ${agent.read_tools.join(", ")}. Writes never run.` : "This agent declares no read-only tools."} />
+                    <Radio checked={toolMode === "live"} onChange={() => setToolMode("live")} label="Run every tool for real"
+                      hint="Full access: any route gets real data — and writes happen. Tasks get created, records change, messages may be sent." />
+                    {toolMode === "live" && (
+                      <label className="mt-2 flex cursor-pointer gap-2 rounded-md border border-critical/40 bg-critical/5 px-3 py-2 text-[12.5px]">
+                        <input type="checkbox" className="mt-0.5 accent-[var(--critical)]" checked={liveConfirmed} onChange={(e) => setLiveConfirmed(e.target.checked)} />
+                        <span>
+                          <span className="block font-medium text-critical">I understand this changes live data and can contact people</span>
+                          <span className="block text-ink-3">Each replay acts as the original run's user, with its real database. Every run × variant × repeat executes its tools again. Conversation memory stays separate.</span>
+                        </span>
+                      </label>
+                    )}
+                  </div>
                 </div>
-              </Field>
-            </div>
+              )}
+            </Step>
           </div>
         )}
 
-        <footer className="flex items-center gap-3 border-t border-line px-5 py-3">
-          {create.isError && <span className="text-critical">{(create.error as Error).message}</span>}
-          <span className="num ml-auto text-[12.5px] text-ink-3">{jobs} replay{jobs === 1 ? "" : "s"}</span>
-          <button onClick={onClose} className="h-8 rounded-md px-3 text-ink-2 hover:bg-subtle">Cancel</button>
-          <button disabled={!agent || picked.size === 0 || validVariants === 0 || create.isPending} onClick={() => create.mutate()}
-            className="h-8 rounded-md bg-ink px-3.5 font-medium text-bg disabled:opacity-40">
+      </div>
+
+      {/* Summary: what will run, what's missing, and the button. Stays in view while you scroll. */}
+      <aside className="rounded-xl border border-line bg-bg p-4 lg:sticky lg:top-4">
+        <h2 className="text-[13px] font-semibold">Summary</h2>
+        <dl className="mt-3 space-y-2 text-[12.5px]">
+          <div className="flex justify-between gap-3"><dt className="text-ink-3">Agent</dt><dd className="truncate font-mono">{agent?.name ?? "—"}</dd></div>
+          <div className="flex justify-between gap-3"><dt className="text-ink-3">Runs</dt><dd className="num">{picked.size || "none yet"}</dd></div>
+          <div className="flex justify-between gap-3"><dt className="text-ink-3">Repeats</dt><dd className="num">{repeats}×</dd></div>
+          <div className="flex justify-between gap-3"><dt className="text-ink-3">Tools</dt>
+            <dd className={toolMode === "live" ? "font-medium text-critical" : ""}>{toolMode === "recorded" ? "from the recording" : toolMode === "live" ? "all run for real" : "live reads"}</dd></div>
+        </dl>
+        <div className="mt-3 border-t border-line/70 pt-3">
+          <div className="mb-1.5 text-[12px] text-ink-3">Variants</div>
+          <ul className="space-y-1.5 text-[12.5px]">
+            {variants.map((v, i) => {
+              const per = Object.entries(picks(v));
+              return (
+                <li key={i}>
+                  <button onClick={() => setTab(i)} className="flex w-full items-start gap-2 text-left hover:text-ink">
+                    <span className={`mt-px grid size-4 shrink-0 place-items-center rounded text-[10px] font-semibold ${isComplete(v) ? "bg-good/15 text-good" : "bg-subtle text-ink-3"}`}>{LETTERS[i]}</span>
+                    <span className="min-w-0 flex-1">
+                      {v.mode === "all"
+                        ? (v.model.trim() ? <span className="font-mono">{short(v.model.trim())}<span className="font-sans text-ink-3"> · every agent</span></span> : <span className="text-ink-3">no model yet</span>)
+                        : per.length ? per.map(([a, m]) => <span key={a} className="block truncate"><span className="text-ink-2">{a}</span> → <span className="font-mono">{short(m)}</span></span>)
+                          : <span className="text-ink-3">no agent changed yet</span>}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+        <div className="mt-4 border-t border-line/70 pt-3">
+          {create.isError ? <p className="mb-2 text-[12.5px] text-critical">{(create.error as Error).message}</p>
+            : problem ? <p className="mb-2 text-[12.5px] text-ink-3">{problem}</p>
+            : <p className="num mb-2 text-[12.5px] text-ink-2">
+                {picked.size} run{picked.size === 1 ? "" : "s"} × {variants.length} variant{variants.length === 1 ? "" : "s"}
+                {repeats > 1 ? ` × ${repeats}` : ""} = <span className="font-medium text-ink">{jobs} replay{jobs === 1 ? "" : "s"}</span>
+              </p>}
+          <button disabled={!!problem || create.isPending} onClick={() => create.mutate()}
+            className="h-9 w-full rounded-md bg-ink px-3.5 font-medium text-bg disabled:opacity-40">
             {create.isPending ? "Starting…" : "Run experiment"}
           </button>
-        </footer>
+          <button onClick={onClose} className="mt-1.5 h-8 w-full rounded-md text-ink-2 hover:bg-subtle">Cancel</button>
+        </div>
+      </aside>
       </div>
     </div>
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Notice({ children }: { children: React.ReactNode }) {
+  return <p className="bg-subtle/60 px-5 py-2.5 text-[12.5px] text-ink-2">{children}</p>;
+}
+
+function Step({ n, title, hint, aside, children }: { n: number; title: string; hint?: string; aside?: React.ReactNode; children?: React.ReactNode }) {
   return (
-    <div>
-      <div className="mb-1.5 text-[12.5px] font-medium">{label}</div>
-      {children}
-      {hint && <p className="mt-1 text-[12px] text-ink-3">{hint}</p>}
+    <section className="px-5 py-4">
+      <div className="mb-3 flex items-center gap-2.5">
+        <span className="grid size-5 shrink-0 place-items-center rounded-full bg-ink text-[11px] font-semibold text-bg">{n}</span>
+        <h3 className="text-[13.5px] font-semibold">{title}</h3>
+        {aside && <div className="ml-auto">{aside}</div>}
+      </div>
+      {hint && <p className="-mt-1.5 mb-3 pl-[30px] text-[12px] text-ink-3">{hint}</p>}
+      {children && <div className="pl-[30px]">{children}</div>}
+    </section>
+  );
+}
+
+function RunPicker({ runs, loading, picked, setPicked, root }: {
+  runs: SourceRun[]; loading: boolean; picked: Set<string>; setPicked: (s: Set<string>) => void; root?: string;
+}) {
+  const [q, setQ] = useState("");
+  const shown = runs.filter((r) => !q || `${r.input_text} ${r.output_text}`.toLowerCase().includes(q.toLowerCase()));
+  const toggle = (id: string, on: boolean) => { const n = new Set(picked); if (on) n.add(id); else n.delete(id); setPicked(n); };
+  if (loading) return <p className="text-ink-3">Loading runs…</p>;
+  if (!runs.length) return <p className="text-ink-3">No recorded “{root}” runs yet — run the agent once and they appear here.</p>;
+  return (
+    <>
+      <div className="mb-2 flex items-center gap-2 text-[12.5px]">
+        <input className={`${controlCls} w-56`} placeholder="Search runs" value={q} onChange={(e) => setQ(e.target.value)} />
+        <span className="num text-ink-3">{picked.size ? `${picked.size} of ${runs.length} selected` : `${runs.length} runs — tick the ones to replay`}</span>
+        <button className="ml-auto text-accent hover:underline" onClick={() => setPicked(new Set([...picked, ...shown.map((r) => r.trace_id)]))}>Select all{q ? " shown" : ""}</button>
+        <button className="text-ink-3 hover:text-ink" onClick={() => setPicked(new Set())}>Clear</button>
+      </div>
+      <div className="max-h-[340px] overflow-auto rounded-md border border-line">
+        {shown.map((s) => (
+          <label key={s.trace_id} className={`flex cursor-pointer items-start gap-3 border-b border-line/70 px-3 py-2 last:border-0 ${picked.has(s.trace_id) ? "bg-accent-soft/40" : "hover:bg-hover"}`}>
+            <input type="checkbox" className="mt-0.5 accent-[var(--accent)]" checked={picked.has(s.trace_id)} onChange={(e) => toggle(s.trace_id, e.target.checked)} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px]">{s.input_text || <span className="text-ink-3">(no readable input)</span>}</span>
+              {s.output_text && <span className="block truncate text-[12px] text-ink-3">→ {s.output_text}</span>}
+            </span>
+            <span className="shrink-0 text-[12px] text-ink-3"><Time value={s.start_time} /></span>
+          </label>
+        ))}
+        {!shown.length && <p className="px-3 py-3 text-ink-3">No runs match “{q}”.</p>}
+      </div>
+    </>
+  );
+}
+
+function VariantEditor({ v, letter, index, tree, currentModel, onChange, onRemove }: {
+  v: VariantDraft; letter: string; index: number; tree: TreeRow[]; currentModel: string;
+  onChange: (patch: Partial<VariantDraft>) => void; onRemove?: () => void;
+}) {
+  const setAgentModel = (agent: string, model: string) => onChange({ perAgent: { ...v.perAgent, [agent]: model } });
+  const changed = Object.keys(picks(v)).length;
+  return (
+    <div className="pt-3">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded-md bg-subtle p-0.5" role="tablist">
+          {(["all", "per"] as const).map((m) => (
+            <button key={m} role="tab" aria-selected={v.mode === m} onClick={() => onChange({ mode: m })}
+              className={`h-7 rounded-[5px] px-3 text-[12.5px] font-medium ${v.mode === m ? "bg-bg text-ink shadow-[0_0_0_1px_var(--border)]" : "text-ink-3 hover:text-ink-2"}`}>
+              {m === "all" ? "Same model for every agent" : `Choose per agent${changed ? ` · ${changed}` : ""}`}
+            </button>
+          ))}
+        </div>
+        <input className={`${controlCls} ml-auto w-48`} placeholder={`Name (default: ${isComplete(v) ? autoName(v, index) : `Variant ${letter}`})`}
+          value={v.name} onChange={(e) => onChange({ name: e.target.value })} aria-label={`Variant ${letter} name`} />
+        {onRemove && <button onClick={onRemove} className="text-[12.5px] text-ink-3 hover:text-critical">Remove</button>}
+      </div>
+
+      {v.mode === "all" ? (
+        <div className="flex items-center gap-3">
+          <label className="flex-1">
+            <span className="mb-1 block text-[12px] text-ink-3">Model for the whole run</span>
+            <input autoFocus className={`${controlCls} h-8 w-full font-mono text-[12.5px]`} list="model-suggestions" value={v.model}
+              placeholder="e.g. z-ai/glm-5.2" onChange={(e) => onChange({ model: e.target.value })} />
+          </label>
+          {currentModel && (
+            <div className="shrink-0 text-[12px] text-ink-3">
+              <span className="mb-1 block">Runs today on</span>
+              <span className="font-mono text-ink-2">{short(currentModel)}</span>
+            </div>
+          )}
+        </div>
+      ) : tree.length ? (
+        <div className="overflow-hidden rounded-md border border-line">
+          <div className="flex items-center gap-2 border-b border-line bg-panel px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.05em] text-ink-3">
+            <span className="flex-1">Agent</span><span className="w-36">Runs today on</span><span className="w-56">Use instead</span>
+          </div>
+          <div className="max-h-64 overflow-auto">
+            {tree.map((r) => {
+              const val = v.perAgent[r.name] ?? "";
+              return (
+                <div key={r.name} className={`flex items-center gap-2 border-b border-line/60 px-3 py-1 last:border-0 ${val.trim() ? "bg-accent-soft/40" : ""} ${r.runs || val ? "" : "opacity-60"}`}
+                  title={r.runs ? undefined : "No runs in the last 7 days"}>
+                  <span className="flex min-w-0 flex-1 items-center gap-2" style={{ paddingLeft: r.depth * 16 }}>
+                    <Tile role={r.depth === 0 ? "main" : "sub"} size={18} />
+                    <span className="truncate text-[12.5px]">{r.name}</span>
+                  </span>
+                  <span className="w-36 truncate font-mono text-[11.5px] text-ink-3" title={r.model}>{r.model ? short(r.model) : "—"}</span>
+                  <input className={`${controlCls} h-6 w-56 font-mono text-[11.5px]`} list="model-suggestions" value={val}
+                    placeholder="unchanged" onChange={(e) => setAgentModel(r.name, e.target.value)} />
+                </div>
+              );
+            })}
+          </div>
+          <p className="border-t border-line bg-panel px-3 py-1.5 text-[11.5px] text-ink-3">Agents left empty keep the model they run on today.</p>
+        </div>
+      ) : (
+        <FreeFormAgents v={v} onChange={onChange} />
+      )}
+    </div>
+  );
+}
+
+/** No blueprint yet: type the agent names. */
+function FreeFormAgents({ v, onChange }: { v: VariantDraft; onChange: (patch: Partial<VariantDraft>) => void }) {
+  const rows = Object.entries(v.perAgent);
+  const [draft, setDraft] = useState({ agent: "", model: "" });
+  return (
+    <div className="space-y-1.5">
+      {rows.map(([a, m]) => (
+        <div key={a} className="flex items-center gap-2 text-[12.5px]">
+          <span className="w-44 truncate font-mono">{a}</span><span className="text-ink-3">uses</span>
+          <input className={`${controlCls} flex-1 font-mono text-[12px]`} list="model-suggestions" value={m}
+            onChange={(e) => onChange({ perAgent: { ...v.perAgent, [a]: e.target.value } })} />
+          <button onClick={() => { const n = { ...v.perAgent }; delete n[a]; onChange({ perAgent: n }); }} className="text-ink-3 hover:text-ink"><Icon.close size={12} /></button>
+        </div>
+      ))}
+      <div className="flex items-center gap-2">
+        <input className={`${controlCls} w-44 font-mono text-[12px]`} placeholder="agent name" value={draft.agent} onChange={(e) => setDraft({ ...draft, agent: e.target.value })} />
+        <span className="text-[12.5px] text-ink-3">uses</span>
+        <input className={`${controlCls} flex-1 font-mono text-[12px]`} list="model-suggestions" placeholder="model" value={draft.model}
+          onChange={(e) => setDraft({ ...draft, model: e.target.value })} />
+        <button disabled={!draft.agent.trim() || !draft.model.trim()} className="text-[12.5px] text-accent disabled:opacity-40"
+          onClick={() => { onChange({ perAgent: { ...v.perAgent, [draft.agent.trim()]: draft.model.trim() } }); setDraft({ agent: "", model: "" }); }}>Add</button>
+      </div>
+      <p className="text-[11.5px] text-ink-3">The app hasn't published a blueprint yet, so type agent names as they appear in traces.</p>
     </div>
   );
 }
 
 function Radio({ checked, onChange, label, hint }: { checked: boolean; onChange: () => void; label: string; hint: string }) {
   return (
-    <label className="flex cursor-pointer gap-2">
+    <label className="mb-1.5 flex cursor-pointer gap-2">
       <input type="radio" className="mt-0.5 accent-[var(--accent)]" checked={checked} onChange={onChange} />
       <span>
-        <span className="block">{label}</span>
+        <span className="block text-[12.5px]">{label}</span>
         <span className="block text-[12px] text-ink-3">{hint}</span>
       </span>
     </label>

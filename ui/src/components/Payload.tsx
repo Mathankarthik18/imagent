@@ -36,9 +36,9 @@ function asMessages(v: Json | undefined): ChatMessage[] | null {
 
 const ROLE_STYLE: Record<string, string> = {
   system: "text-ink-3",
-  user: "text-[#2a78d6] dark:text-[#6da7ec]",
+  user: "text-ink",
   assistant: "text-[#0f8a5f] dark:text-[#4cc79a]",
-  tool: "text-[#c2541f] dark:text-[#ef9a6e]",
+  tool: "text-[#2a62c4] dark:text-[#7aa7f0]",
 };
 
 function ContentView({ content }: { content: Json }) {
@@ -79,7 +79,7 @@ function MessageList({ messages }: { messages: ChatMessage[] }) {
           {!(m.content === "" && m.tool_calls?.length) && <ContentView content={m.content} />}
           {m.tool_calls?.map((tc, j) => (
             <div key={j} className="mt-2 rounded-md bg-subtle px-2.5 py-2">
-              <div className="mb-1 font-mono text-[12px] text-[#c2541f] dark:text-[#ef9a6e]">
+              <div className="mb-1 font-mono text-[12px] text-[#2a62c4] dark:text-[#7aa7f0]">
                 {tc.name}<span className="text-ink-3">()</span> <span className="text-ink-3">{tc.id}</span>
               </div>
               <JsonTree value={tc.args ?? null} />

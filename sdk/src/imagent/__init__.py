@@ -13,8 +13,10 @@
 from ._context import context
 from .decorators import observe
 from .redact import default_redactor, make_redactor
-from . import runner
+from . import blueprint, runner
+from .blueprint import publish as publish_blueprint
 from .replay import model_override
+from .experiments import agent, experiment
 from .runner import ReplayJob, register_agent
 from .runtime import ImagentConfig, flush, get_config, init, shutdown
 
@@ -27,6 +29,10 @@ def get_callback_handler():
 
 
 __all__ = [
+    "agent",
+    "experiment",
+    "blueprint",
+    "publish_blueprint",
     "ReplayJob",
     "model_override",
     "register_agent",

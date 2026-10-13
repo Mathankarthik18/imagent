@@ -46,6 +46,16 @@ class ReplayJob:
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @property
+    def models(self) -> dict[str, str]:
+        """Per-slot models picked for this variant (slot key → model id; unset slots absent)."""
+        m = self.variant.get("models") or {}
+        return {k: str(v) for k, v in m.items() if v} if isinstance(m, dict) else {}
+
+    def model_for(self, slot: str, default: str = "") -> str:
+        """Model for one slot: the slot's own pick, else the variant-wide model, else ``default``."""
+        return self.models.get(slot) or self.model or default
+
+    @property
     def input(self) -> Any:
         try:
             return json.loads(self.source.get("input") or "null")
@@ -82,6 +92,7 @@ class _Agent:
     read_tools: set[str]
     passthrough: set[str]
     models: list[str]
+    model_slots: list[dict[str, str]]
 
 
 _agents: dict[str, _Agent] = {}
@@ -90,12 +101,19 @@ _agents: dict[str, _Agent] = {}
 def register_agent(name: str, fn: Callable[[ReplayJob], Awaitable[Any] | Any], *, source_root: str,
                    description: str = "", read_tools: tuple[str, ...] | list[str] = (),
                    passthrough_tools: tuple[str, ...] | list[str] = DEFAULT_PASSTHROUGH,
-                   models: list[str] | None = None) -> None:
+                   models: list[str] | None = None,
+                   model_slots: list[dict[str, str]] | None = None) -> None:
     """Make an agent replayable. ``source_root`` is the root span name of runs it can
     replay; ``read_tools`` may run live in ``live_reads`` mode (everything else is stubbed);
-    ``models`` are suggestions shown in the UI."""
+    ``models`` are suggestions shown in the UI.
+
+    ``model_slots`` lets one variant pick a model per role, e.g.
+    ``[{"key": "orchestrator", "label": "Orchestrator", "default": "gpt-5"}, ...]`` —
+    read the picks with ``job.model_for(key)``. Without slots a variant is one model."""
     replay.install()
-    _agents[name] = _Agent(name, fn, source_root, description, set(read_tools), set(passthrough_tools), models or [])
+    slots = [{"key": str(s["key"]), "label": str(s.get("label") or s["key"]), "default": str(s.get("default") or ""),
+              "description": str(s.get("description") or "")} for s in (model_slots or [])]
+    _agents[name] = _Agent(name, fn, source_root, description, set(read_tools), set(passthrough_tools), models or [], slots)
 
 
 def _post(path: str, body: dict[str, Any]) -> tuple[int, Any]:
@@ -126,6 +144,8 @@ async def _run_job(job_raw: dict[str, Any]) -> None:
              "imagent.experiment.source_trace_id": job.source.get("trace_id", "")}
     if job.model:
         attrs[sc.GEN_AI_REQUEST_MODEL] = job.model
+    for slot, m in job.models.items():
+        attrs[f"imagent.experiment.model.{slot}"] = m
     with context(thread_id=job.thread_id, tags=["experiment", f"variant:{job.variant.get('name', '')}"],
                  metadata={"experiment_id": job.experiment_id, "source_trace_id": job.source.get("trace_id", "")}):
         span_cm = tracer.start_as_current_span(f"replay:{job.agent}", attributes=attrs) if tracer else None
@@ -164,6 +184,28 @@ async def _run_job(job_raw: dict[str, Any]) -> None:
         "job_id": job.job_id, "trace_id": trace_id, "status": status, "error": error, "output": (text or "")[:20000]})
 
 
+def _agent_list() -> list[dict[str, Any]]:
+    return [{"name": a.name, "source_root": a.source_root, "description": a.description,
+             "read_tools": sorted(a.read_tools), "models": a.models, "model_slots": a.model_slots,
+             "auto": bool(getattr(a, "auto", False))} for a in _agents.values()]
+
+
+def _live_agents() -> list[str]:
+    from . import experiments
+
+    return sorted(experiments._latest_config)
+
+
+async def claim_once(runner_id: str, *, ready: bool = True) -> dict[str, Any] | None:
+    """Report this runner's agents and take the next job (None = nothing to do / not ready)."""
+    code, job = await asyncio.to_thread(_post, "/api/runner/claim", {
+        "runner_id": runner_id, "host": socket.gethostname(), "agents": _agent_list(), "ready": ready,
+        # agents with a live connection (they ran since the app started) — only these take live-tool jobs
+        "live_agents": _live_agents(),
+        "project": (get_config().service if get_config() else "")})  # fallback only — a project key decides
+    return job if code == 200 and job else None
+
+
 async def run_forever(poll_interval: float = 2.0) -> None:
     """Poll for experiment jobs and run them one at a time. Cancel the task to stop."""
     runner_id = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
@@ -171,10 +213,13 @@ async def run_forever(poll_interval: float = 2.0) -> None:
     backoff = poll_interval
     while True:
         agents = [{"name": a.name, "source_root": a.source_root, "description": a.description,
-                   "read_tools": sorted(a.read_tools), "models": a.models} for a in _agents.values()]
+                   "read_tools": sorted(a.read_tools), "models": a.models,
+                   "model_slots": a.model_slots} for a in _agents.values()]
         try:
             code, job = await asyncio.to_thread(_post, "/api/runner/claim",
-                                                {"runner_id": runner_id, "host": socket.gethostname(), "agents": agents})
+                                                {"runner_id": runner_id, "host": socket.gethostname(), "agents": agents,
+                                                 # fallback only — a project API key decides the project
+                                                 "project": (get_config().service if get_config() else "")})
             backoff = poll_interval
             if code == 200 and job:
                 await _run_job(job)

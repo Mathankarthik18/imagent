@@ -33,6 +33,10 @@ services:
       IMAGENT_INGEST_KEY: ${IMAGENT_INGEST_KEY:-}
       IMAGENT_READ_KEY: ${IMAGENT_READ_KEY:-}
       IMAGENT_RETENTION_DAYS: ${IMAGENT_RETENTION_DAYS:-30}
+      # AI judge for experiments (which answer is better). Off until a key is set — put it in ./.env.
+      IMAGENT_JUDGE_API_KEY: ${IMAGENT_JUDGE_API_KEY:-}
+      IMAGENT_JUDGE_MODEL: ${IMAGENT_JUDGE_MODEL:-anthropic/claude-sonnet-5.5}
+      IMAGENT_JUDGE_BASE_URL: ${IMAGENT_JUDGE_BASE_URL:-https://openrouter.ai/api/v1}
     ports:
       - "127.0.0.1:8300:8300"
     healthcheck:

@@ -11,6 +11,7 @@ import { LiveDot } from "./Live";
 import { SpanPanel } from "./SpanPanel";
 import { Split } from "./Split";
 import { ErrorBox, Panel, Spinner } from "./ui";
+import { Icon } from "./icons";
 
 export function useTrace(traceId: string) {
   return useQuery({
@@ -76,7 +77,7 @@ export function TraceView({ traceId, selected, onSelect, splitId = "trace", heig
       <div className="num flex flex-wrap items-center gap-x-5 gap-y-1 text-[12.5px] text-ink-3">
         {!player.on && (
           <button onClick={() => { setMain("flow"); player.start(); }} title="Play the run back as it happened"
-            className="inline-flex h-7 items-center gap-1.5 rounded-md bg-ink px-2.5 text-[12px] font-medium text-bg">▶ Replay</button>
+            className="inline-flex h-7 items-center gap-1.5 rounded-md bg-ink px-2.5 text-[12px] font-medium text-bg"><Icon.play size={11} /> Replay</button>
         )}
         <span><span className="text-ink">{fmtDuration(stats.duration)}</span> {stats.running ? "so far" : "total"}</span>
         <span><span className="text-ink">{spans.length}</span> spans</span>

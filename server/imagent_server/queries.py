@@ -24,6 +24,7 @@ class Filters:
     user_id: str | None = None
     tag: str | None = None
     name: str | None = None
+    origin: str | None = None          # None/"production" → live runs; "experiment"; "all"
 
 
 def _base_where(f: Filters, params: dict[str, Any], alias: str = "") -> list[str]:
@@ -33,8 +34,12 @@ def _base_where(f: Filters, params: dict[str, Any], alias: str = "") -> list[str
     if f.project:
         params["project"] = f.project
         where.append(f"{p}project = {{project:String}}")
-    else:
-        where.append(f"NOT endsWith({p}project, '/experiments')")  # replays never inflate normal views
+    # Experiment replays live in their project but never inflate the normal views.
+    # (An experiment thread asked for by id is shown whatever the origin.)
+    if f.origin == "experiment":
+        where.append(f"{p}origin = 'experiment'")
+    elif f.origin != "all" and not (f.thread_id or "").startswith("experiment:"):
+        where.append(f"{p}origin = ''")
     if f.environment:
         params["environment"] = f.environment
         where.append(f"{p}environment = {{environment:String}}")

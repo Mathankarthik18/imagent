@@ -15,7 +15,7 @@ interface Row {
 }
 
 /** The run as a tree of steps: main agent → LLM/tool calls → sub-agents (collapsible) → their steps.
- *  Normal mode: click selects a step. Replay: shows ✓ ● ○ progress and click jumps there. */
+ *  Normal mode: click selects a step. Replay: shows done / running / pending and click jumps there. */
 export function StepsTree({ spans, selectedId, onSelect, player, onOrder, onOpenTrace, onExpand, title = "Steps" }: {
   spans: FlowSpan[];
   /** Show the full tree in the main panel instead of the canvas. */
@@ -122,7 +122,7 @@ export function StepsTree({ spans, selectedId, onSelect, player, onOrder, onOpen
         {onExpand && (
           <button onClick={onExpand} title="Open the full tree in the main panel"
             className="inline-flex items-center gap-1 rounded px-1 py-0.5 font-normal normal-case tracking-normal text-ink-3 hover:bg-subtle hover:text-ink">
-            ⤢ Expand
+            <Icon.expand size={11} /> Expand
           </button>
         )}
       </div>
@@ -131,7 +131,7 @@ export function StepsTree({ spans, selectedId, onSelect, player, onOrder, onOpen
           const phase = replay ? player!.phaseOf(r.span) : undefined;
           const active = r.key === activeId;
           const failed = r.span.status === "error";
-          const tone = r.agent ? (r.agent.sub ? "text-[#4a3aa7] dark:text-[#b8b0f2]" : "text-[#2a78d6] dark:text-[#6da7ec]") : "";
+          const tone = r.agent ? (r.agent.sub ? "text-[#4a3aa7] dark:text-[#b8b0f2]" : "text-[#cc4a1a] dark:text-[#ff8a63]") : "";
           return (
             <div key={r.key} data-step={r.key} role="treeitem" aria-selected={active}
               onClick={() => (replay ? player!.seek(ts(r.span) - player!.t0 + 1) : onSelect?.(r.span))}
@@ -145,10 +145,10 @@ export function StepsTree({ spans, selectedId, onSelect, player, onOrder, onOpen
               ) : <span className="size-4 shrink-0" />}
               {replay && (r.kind === "llm" || r.kind === "tool") && (
                 <span className={`w-3 shrink-0 text-center text-[11px] ${phase === "done" ? "text-good" : phase === "running" ? "text-accent" : "text-ink-3/50"}`}>
-                  {phase === "done" ? "✓" : phase === "running" ? "●" : "○"}
+                  {phase === "done" ? <Icon.check size={11} /> : phase === "running" ? <Icon.running size={11} /> : <Icon.pending size={11} />}
                 </span>
               )}
-              <KindIcon kind={r.kind} size={13} />
+              <KindIcon kind={r.agent?.sub ? "subagent" : r.kind} name={r.span.name} size={13} />
               {r.agent && (
                 <span className={`shrink-0 text-[9.5px] font-semibold uppercase tracking-[0.05em] ${tone}`}>{r.agent.sub ? "Sub-agent" : "Agent"}</span>
               )}

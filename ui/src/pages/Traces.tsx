@@ -12,13 +12,16 @@ import { api, NO_THREAD, THREAD_SORTS, type Facets, type Page, type ThreadGroup,
 import { useHotkey, useListKeys } from "../lib/keys";
 import { useRunning } from "../lib/live";
 import { useBaseParams } from "../lib/state";
+import { pp } from "../lib/project";
 
 const PAGE = 50;
 const FILTER_KEYS = ["q", "status", "model", "agent", "tag", "name", "user_id", "thread_id"] as const;
 
 export function Traces() {
-  const base = useBaseParams();
   const [params, setParams] = useSearchParams();
+  // Production runs by default; experiment replays live in the same project, one switch away.
+  const origin = params.get("origin") === "experiment" ? "experiment" : "production";
+  const base = { ...useBaseParams(), origin: origin === "experiment" ? "experiment" : undefined };
   const filters = Object.fromEntries(FILTER_KEYS.map((k) => [k, params.get(k) ?? ""])) as Record<(typeof FILTER_KEYS)[number], string>;
   // Threads first: one row per conversation; "All runs" shows every run flat.
   const view = params.get("view") === "list" ? "list" : "thread";
@@ -88,6 +91,8 @@ export function Traces() {
             {THREAD_SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
         )}
+        <Segmented value={origin} onChange={(v) => set({ origin: v === "production" ? "" : v })}
+          options={[{ id: "production", label: "Production" }, { id: "experiment", label: "Experiments" }]} />
         <Segmented value={view} onChange={(v) => set({ view: v === "thread" ? "" : v })}
           options={[{ id: "thread", label: "By thread" }, { id: "list", label: "All runs" }]} />
       </PageHeader>
@@ -140,10 +145,10 @@ export function Traces() {
         <div className="fixed bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-line bg-bg px-4 py-2.5 shadow-[0_12px_32px_-8px_rgb(0_0_0/0.25)]">
           <span className="text-[12.5px] text-ink-2">{picked.length} selected</span>
           <button disabled={picked.length !== 2} title={picked.length !== 2 ? "Select exactly two runs" : undefined}
-            onClick={() => navigate(`/compare?a=${picked[0].trace_id}&b=${picked[1].trace_id}`)}
+            onClick={() => navigate(pp(`/compare?a=${picked[0].trace_id}&b=${picked[1].trace_id}`))}
             className="h-7 rounded-md border border-line px-2.5 text-[12.5px] font-medium hover:border-line-strong disabled:opacity-40">Compare</button>
           <button disabled={!sameRoot} title={!sameRoot ? "Pick runs of the same agent" : undefined}
-            onClick={() => navigate(`/experiments?new=1&root=${encodeURIComponent(picked[0].name)}&sources=${picked.map((t) => t.trace_id).join(",")}`)}
+            onClick={() => navigate(pp(`/experiments/new?root=${encodeURIComponent(picked[0].name)}&sources=${picked.map((t) => t.trace_id).join(",")}`))}
             className="h-7 rounded-md bg-ink px-2.5 text-[12.5px] font-medium text-bg disabled:opacity-40">Replay with another model</button>
           <button onClick={() => setSelected(new Map())} className="text-[12.5px] text-ink-3 hover:text-ink">Clear</button>
         </div>

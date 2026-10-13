@@ -9,6 +9,7 @@ import { PayloadView } from "./Payload";
 import { StepsTree } from "./StepsTree";
 import { useTrace } from "./TraceView";
 import { Panel, Spinner } from "./ui";
+import { Icon } from "./icons";
 
 /** The span fields playback needs (full spans and the thread endpoint's lite spans both fit). */
 export type PlaySpan = Pick<Span, "span_id" | "parent_span_id" | "trace_id" | "name" | "kind" | "status" | "start_time" |
@@ -147,14 +148,14 @@ export function PlayerBar({ player: p }: { player: Player }) {
   return (
     <div className="flex h-14 items-center gap-3 rounded-lg border border-line bg-panel px-3">
       <button onClick={p.playing ? p.pause : p.play} title={p.playing ? "Pause (space)" : "Play (space)"}
-        className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-ink text-[12px] text-bg">{p.playing ? "❚❚" : "▶"}</button>
+        className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-ink text-[12px] text-bg">{p.playing ? <Icon.pause size={14} /> : <Icon.play size={14} />}</button>
       <button onClick={() => { p.seek(0); p.play(); }} title="Restart" className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ink-2 hover:bg-subtle">⟲</button>
       <span className="num w-[92px] shrink-0 text-[12.5px] text-ink">{clock(p.t)} <span className="text-ink-3">/ {clock(p.dur)}</span></span>
       <div className="relative h-8 min-w-0 flex-1">
         {/* chapter segments */}
         <div className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 overflow-hidden rounded-full bg-subtle">
           {p.chapters.map((c) => (
-            <span key={c.span.span_id} className={`absolute inset-y-0 ${c.span.kind === "llm" ? "bg-[#1baf7a]" : "bg-[#eb6834]"} ${p.t >= c.at ? "opacity-90" : "opacity-30"}`}
+            <span key={c.span.span_id} className={`absolute inset-y-0 ${c.span.kind === "llm" ? "bg-[#1baf7a]" : "bg-[#3a6fc4]"} ${p.t >= c.at ? "opacity-90" : "opacity-30"}`}
               style={{ left: `${(c.at / p.dur) * 100}%`, width: `max(2px, ${((c.end - c.at) / p.dur) * 100}%)` }} />
           ))}
         </div>
@@ -232,16 +233,16 @@ export function NowPlaying({ player: p, spans }: { player: Player; spans: PlaySp
         {cur ? (
           <>
             <div className="mt-1.5 flex min-w-0 items-center gap-2">
-              <KindIcon kind={cur.span.kind} size={16} />
+              <KindIcon kind={cur.span.kind} name={cur.span.name} size={16} />
               <span className="truncate text-[14px] font-semibold">{cur.span.kind === "llm" ? cur.span.model || cur.span.name : cur.span.name}</span>
               <span className="ml-auto shrink-0">
                 {phase === "running"
                   ? <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-accent"><LiveDot /> {fmtDuration(elapsedMs)} / {fmtDuration(cur.span.duration_ms)}</span>
-                  : <span className="text-[12px] text-ink-3">✓ {fmtDuration(cur.span.duration_ms)}</span>}
+                  : <span className="inline-flex items-center gap-1 text-[12px] text-ink-3"><Icon.check size={12} /> {fmtDuration(cur.span.duration_ms)}</span>}
               </span>
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 text-[12px] text-ink-3">
-              <span>{cur.span.kind === "llm" ? "LLM call" : "Tool call"} in <span className={cur.depth ? "text-[#4a3aa7] dark:text-[#b8b0f2]" : "text-[#2a78d6] dark:text-[#6da7ec]"}>{cur.agent || "agent"}</span>{cur.depth ? " (sub-agent)" : ""}</span>
+              <span>{cur.span.kind === "llm" ? "LLM call" : "Tool call"} in <span className={cur.depth ? "text-[#4a3aa7] dark:text-[#b8b0f2]" : "text-[#cc4a1a] dark:text-[#ff8a63]"}>{cur.agent || "agent"}</span>{cur.depth ? " (sub-agent)" : ""}</span>
               {cur.span.kind === "llm" && cur.span.input_tokens + cur.span.output_tokens > 0 && (
                 <span className="num">{fmtNum(cur.span.input_tokens)} in · {fmtNum(cur.span.output_tokens)} out · {fmtCost(cur.span.cost_usd)}</span>
               )}
@@ -271,7 +272,7 @@ export function NowPlaying({ player: p, spans }: { player: Player; spans: PlaySp
                 if (reveal <= 0) return null;
                 return (
                   <div key={i} className="rounded-lg bg-subtle px-3 py-2">
-                    <div className="font-mono text-[12px] text-[#c2541f] dark:text-[#ef9a6e]">→ calls {c.name}()</div>
+                    <div className="font-mono text-[12px] text-[#2a62c4] dark:text-[#7aa7f0]">→ calls {c.name}()</div>
                     <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11.5px] text-ink-2">
                       {c.args.slice(0, Math.floor(c.args.length * Math.min(1, reveal)))}
                     </pre>

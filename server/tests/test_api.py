@@ -34,6 +34,10 @@ def client():
         from imagent_server import experiments as _exp
         c.portal.call(db.query, f"TRUNCATE TABLE IF EXISTS {_exp.JOBS}")
         c.portal.call(db.query, f"TRUNCATE TABLE IF EXISTS {_exp.EXPERIMENTS}")
+        from imagent_server import blueprints as _bp
+        c.portal.call(db.query, f"TRUNCATE TABLE IF EXISTS {_bp.BLUEPRINTS}")
+        from imagent_server import projects as _pr
+        c.portal.call(db.query, f"TRUNCATE TABLE IF EXISTS {_pr.PROJECTS}")
         yield c
 
 
@@ -293,6 +297,7 @@ def test_reprice_fixes_unpriced_and_doubled_streamed_names(client):
     row = dict(zip(db.COLUMNS, [
         "reprice-test", "", "a" * 32, "b" * 16, "", 1, "glm", "llm", "ok", "", now, now, 1.0, "", "", "", "",
         "z-ai/glm-5.3-flashz-ai/glm-5.3-flash", "", 1_000_000, 0, 0, 0, 0.0, "unknown", None, "", "", [], "", {}, "",
+        "", "",
     ]))
     client.portal.call(db.insert_spans, [list(row.values())])
     pricing.set_catalog({"glm-5-3-flash": pricing.Price(0.15, 0.5, 0.03)})
@@ -358,23 +363,25 @@ def test_compare_and_experiment_lifecycle(client):
     assert c["outputs"]["a"] == "Created task T-1." and c["metrics"]["a"]["tool_calls"] == 2
 
     # Phase 2: no runner → can't create
-    body = {"agent": "email", "source_trace_ids": [src], "variants": [{"name": "glm", "model": "z-ai/glm"}], "repeats": 1}
-    assert client.post("/api/experiments", json=body).status_code == 409
+    body = {"agent": "email", "project": "exp-test", "source_trace_ids": [src],
+            "variants": [{"name": "glm", "model": "z-ai/glm"}], "repeats": 1}
+    assert client.post("/api/experiments", json={**body, "project": ""}).status_code == 422
     key = {"x-imagent-key": "ingest-secret"}
     agents = [{"name": "email", "source_root": "email_router"}]
-    assert client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents}, headers=key).status_code == 204
-    assert client.get("/api/runners").json()[0]["agents"][0]["name"] == "email"
-    assert client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents}).status_code == 401  # needs ingest key
+    assert client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents, "project": "exp-test"}, headers=key).status_code == 204
+    assert client.get("/api/runners", params={"project": "exp-test"}).json()[0]["agents"][0]["name"] == "email"
+    assert client.get("/api/runners", params={"project": "other"}).json() == []
+    assert client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents, "project": "exp-test"}).status_code == 401  # needs ingest key
 
     created = client.post("/api/experiments", json=body).json()
     assert created["jobs"] == 1
-    job = client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents}, headers=key).json()
+    job = client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents, "project": "exp-test"}, headers=key).json()
     assert job["variant"]["model"] == "z-ai/glm" and job["source"]["trace_id"] == src
     assert [f["name"] for f in job["fixtures"]] == ["lookup_vessel", "create_task"]
     assert job["fixtures"][0]["output"] == "imo 9623740"
     assert job["history"] == [{"role": "user", "content": "Noon report NORD KUDU"}]
     assert job["thread_id"].startswith("experiment:")
-    assert client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents}, headers=key).status_code == 204
+    assert client.post("/api/runner/claim", json={"runner_id": "r1", "agents": agents, "project": "exp-test"}, headers=key).status_code == 204
 
     # The runner's replay: same lookup (recorded), skipped the task → a regression vs baseline.
     res = _agent_run(tr, [("lookup_vessel", {"name": "NORD KUDU"}, "imo 9623740")], "No task needed.",
@@ -388,11 +395,222 @@ def test_compare_and_experiment_lifecycle(client):
     score = d["jobs"][0]["score"]
     assert score["verdict"] == "diverged" and score["missing_tools"] == ["create_task"]
     assert score["metrics"]["tool_calls"] == 1 and score["baseline_metrics"]["tool_calls"] == 2
-    lst = client.get("/api/experiments").json()
+    lst = client.get("/api/experiments", params={"project": "exp-test"}).json()
     assert lst[0]["jobs"]["done"] == 1 and lst[0]["variants"] == ["glm"]
 
-    # Replays live in their own project and never inflate normal views.
-    projects = client.get("/api/projects").json()
-    assert "exp-test/experiments" in projects
-    names = [t["name"] for t in client.get("/api/traces", params={"start": "2020-01-01T00:00:00Z"}).json()["items"]]
-    assert "replay:email" not in names
+    # Replays stay in their project, marked as experiments, and never inflate normal views.
+    since = {"project": "exp-test", "start": "2020-01-01T00:00:00Z"}
+    names = [t["name"] for t in client.get("/api/traces", params=since).json()["items"]]
+    assert "replay:email" not in names and "email_router" in names
+    exp_names = [t["name"] for t in client.get("/api/traces", params={**since, "origin": "experiment"}).json()["items"]]
+    assert exp_names == ["replay:email"]
+    assert client.get("/api/experiments", params={"project": "other"}).json() == []
+
+
+def test_blueprint_publish_and_live_stats(client):
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    bp = {"schema": 1, "framework": "deepagents", "versions": {"deepagents": "0.7.9"}, "root": {
+        "name": "router", "description": "", "model": {"name": "x", "class": "C", "provider": "p", "params": {}},
+        "system_prompt": "You route.", "middleware": [{"name": "ToolErrorMiddleware", "hooks": []}],
+        "graph": {"nodes": [{"id": "model", "type": "model"}], "edges": []},
+        "tools": [{"name": "lookup_vessel", "description": "", "args": ["name"], "builtin": False},
+                  {"name": "never_used", "description": "", "args": [], "builtin": False}],
+        "subagents": [{"name": "noon_agent", "description": "Noon reports", "model": None, "system_prompt": "",
+                       "middleware": [], "graph": {"nodes": [], "edges": []}, "tools": [], "subagents": []}]}}
+    key = {"x-imagent-key": "ingest-secret"}
+    body = {"project": "bp-test", "name": "router", "hash": "h1", "blueprint": bp}
+    assert client.post("/api/blueprints", json=body).status_code == 401
+    assert client.post("/api/blueprints", json=body, headers=key).json()["changed"] is True
+    assert client.post("/api/blueprints", json=body, headers=key).json()["changed"] is False
+
+    exp_ = InMemorySpanExporter()
+    tp = TracerProvider(resource=Resource.create({"service.name": "bp-test"}))
+    tp.add_span_processor(SimpleSpanProcessor(exp_))
+    tr, who = tp.get_tracer("imagent"), {"gen_ai.agent.name": "router"}  # the SDK stamps every span with its agent
+    with tr.start_as_current_span("router", attributes={"imagent.span_kind": "agent", "imagent.root": True, **who}):
+        with tr.start_as_current_span("x", attributes={"imagent.span_kind": "llm", "gen_ai.request.model": "x", **who}):
+            pass
+        with tr.start_as_current_span("lookup_vessel", attributes={"imagent.span_kind": "tool", **who}):
+            pass
+    _post_spans(client, exp_.get_finished_spans())
+
+    listed = [b for b in client.get("/api/blueprints").json() if b["project"] == "bp-test"]
+    assert listed[0]["agents"] == 2 and listed[0]["tools"] == 2 and listed[0]["framework"] == "deepagents"
+    got = client.get("/api/blueprints/bp-test/router").json()
+    assert got["blueprint"]["root"]["subagents"][0]["name"] == "noon_agent"
+    s = got["stats"]["router"]
+    assert s["runs"] == 1 and s["llm_calls"] == 1 and s["models"][0]["model"] == "x"
+    assert s["tools"]["lookup_vessel"]["calls"] == 1 and "never_used" not in s["tools"]
+    assert client.get("/api/blueprints/bp-test/nope").status_code == 404
+
+
+def test_project_key_routes_spans_blueprint_and_runner(client):
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    created = client.post("/api/projects", json={"name": "Fleet Ops"}).json()
+    pid, key = created["id"], {"x-imagent-key": created["key"]}
+    assert pid == "fleet-ops" and created["key"].startswith("imk_") and created["key_hint"] in created["key_hint"]
+    assert client.post("/api/projects", json={"name": "Fleet Ops"}).json()["id"] == "fleet-ops-2"  # never collides
+
+    # Two services of one app, sending with the project key, land in the same project.
+    for service in ("fleet-api", "fleet-worker"):
+        exp_ = InMemorySpanExporter()
+        tp = TracerProvider(resource=Resource.create({"service.name": service}))
+        tp.add_span_processor(SimpleSpanProcessor(exp_))
+        _agent_run(tp.get_tracer("imagent"), [], "ok", root_name=f"run-{service}")
+        from .conftest import otlp_bytes
+        r = client.post("/v1/traces", content=otlp_bytes(exp_.get_finished_spans()),
+                        headers={**key, "content-type": "application/x-protobuf"})
+        assert r.status_code == 200
+    names = {t["name"] for t in client.get("/api/traces", params={"project": pid, "start": "2020-01-01T00:00:00Z"}).json()["items"]}
+    assert names == {"run-fleet-api", "run-fleet-worker"}
+    listed = {p["id"]: p for p in client.get("/api/projects").json()["projects"]}
+    assert sorted(listed[pid]["services"]) == ["fleet-api", "fleet-worker"] and listed[pid]["runs_total"] == 2
+    assert "key" not in listed[pid] and "key_hash" not in listed[pid]
+
+    # Blueprint + runner pick the project from the key, ignoring what the body claims.
+    bp = {"schema": 1, "framework": "langgraph", "versions": {}, "root": {"name": "ops", "description": "", "model": None,
+          "system_prompt": "", "middleware": [], "graph": {"nodes": [], "edges": []}, "tools": [], "subagents": []}}
+    client.post("/api/blueprints", json={"project": "spoofed", "name": "ops", "hash": "h", "blueprint": bp}, headers=key)
+    assert [b["name"] for b in client.get("/api/blueprints", params={"project": pid}).json()] == ["ops"]
+    assert client.get("/api/blueprints", params={"project": "spoofed"}).json() == []
+    client.post("/api/runner/claim", json={"runner_id": "rk", "agents": [{"name": "ops"}], "project": "spoofed"}, headers=key)
+    assert [r["runner_id"] for r in client.get("/api/runners", params={"project": pid}).json()] == ["rk"]
+
+    # Unknown / rotated keys are refused.
+    assert client.post("/v1/traces", content=b"", headers={"x-imagent-key": "imk_nope"}).status_code == 401
+    rotated = client.post(f"/api/projects/{pid}/rotate-key").json()
+    assert rotated["key"] != created["key"]
+    assert client.post("/api/blueprints", json={"name": "ops", "hash": "h", "blueprint": bp}, headers=key).status_code == 401
+
+    # Existing data can be adopted by a project under its current name.
+    adopted = client.post("/api/projects", json={"name": "Bosun test", "adopt": "bosun-test"}).json()
+    assert adopted["id"] == "bosun-test"
+    assert client.post("/api/projects", json={"name": "again", "adopt": "bosun-test"}).status_code == 409
+    renamed = client.patch("/api/projects/bosun-test", json={"name": "Bosun (test)"}).json()
+    assert renamed["name"] == "Bosun (test)"
+    assert "bosun-test" not in {u["id"] for u in client.get("/api/projects").json()["unclaimed"]}
+
+
+def test_judge_and_review_decide_which_answer_is_better(client):
+    import json as _json
+    from unittest.mock import patch
+
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from imagent_server import experiments, judge
+
+    exp_ = InMemorySpanExporter()
+    tp = TracerProvider(resource=Resource.create({"service.name": "judge-test"}))
+    tp.add_span_processor(SimpleSpanProcessor(exp_))
+    tr = tp.get_tracer("imagent")
+    src = _agent_run(tr, [("lookup_vessel", {"name": "BOA"}, "noon 19 Aug")], "I don't know.")
+    _post_spans(client, exp_.get_finished_spans())
+    exp_.clear()
+
+    key = {"x-imagent-key": "ingest-secret"}
+    agents = [{"name": "jbot", "source_root": "email_router"}]
+    body = {"agent": "jbot", "project": "judge-test", "source_trace_ids": [src], "variants": [{"name": "new", "model": "m"}]}
+    created = client.post("/api/experiments", json=body).json()
+    job = client.post("/api/runner/claim", json={"runner_id": "rj", "agents": agents, "project": "judge-test"}, headers=key).json()
+    res = _agent_run(tr, [("lookup_vessel", {"name": "BOA"}, "noon 19 Aug")], "Last noon report: 19 Aug.", thread=job["thread_id"])
+    _post_spans(client, exp_.get_finished_spans())
+    client.post("/api/runner/complete", json={"job_id": job["job_id"], "trace_id": res, "status": "ok"}, headers=key)
+
+    # The judge sees X/Y in random order; its "X"/"Y" answer is mapped back to original/new.
+    seen = {}
+
+    def fake_call(messages, cfg=None):
+        seen["prompt"], seen["cfg"] = messages[1]["content"], cfg
+        return _json.dumps({"better": "Y", "reason": "Y uses the tool data.",
+                            "scores": {"X": {"correct": 2, "complete": 2, "clear": 4}, "Y": {"correct": 5, "complete": 5, "clear": 5}}}), 0.004
+    with patch.object(judge, "_call", side_effect=fake_call), patch("random.random", return_value=0.9):  # no flip: X = original
+        verdict = client.portal.call(judge.judge_pair, src, res, "Always give dates as DD MMM YYYY.")
+    assert verdict["better"] == "new" and verdict["scores"]["new"]["correct"] == 5 and verdict["cost"] == 0.004
+    assert "noon 19 Aug" in seen["prompt"] and "Last noon report: 19 Aug." in seen["prompt"] and "I don't know." in seen["prompt"]
+    with patch.object(judge, "_call", side_effect=fake_call), patch("random.random", return_value=0.1):  # flipped: X = new
+        assert client.portal.call(judge.judge_pair, src, res, "")["better"] == "original"
+
+    # The worker's own query finds it (all projects, and filtered to projects with a judge).
+    assert job["job_id"] in [j["id"] for j in client.portal.call(lambda: experiments.unjudged(limit=50))]
+    assert [j["id"] for j in client.portal.call(lambda: experiments.unjudged(projects=["judge-test"]))] == [job["job_id"]]
+    assert client.portal.call(lambda: experiments.unjudged(projects=["other"])) == []
+    client.portal.call(experiments.save_judgement, job["job_id"], verdict)
+    assert client.portal.call(lambda: experiments.unjudged(projects=["judge-test"])) == []
+    d = client.get(f"/api/experiments/{created['id']}").json()
+    assert d["jobs"][0]["judgement"]["better"] == "new"
+    lst = client.get("/api/experiments", params={"project": "judge-test"}).json()
+    assert lst[0]["results"][0]["better"] == {"new": 1, "tie": 0, "original": 0}
+
+    # A person's review wins over the judge; clearing it falls back to the judge.
+    assert client.post(f"/api/experiments/jobs/{job['job_id']}/review", json={"better": "original", "note": "wrong vessel"}).json()["ok"]
+    lst = client.get("/api/experiments", params={"project": "judge-test"}).json()
+    assert lst[0]["results"][0]["better"] == {"new": 0, "tie": 0, "original": 1}
+    client.post(f"/api/experiments/jobs/{job['job_id']}/review", json={"better": None})
+    assert client.get("/api/experiments", params={"project": "judge-test"}).json()[0]["results"][0]["better"]["new"] == 1
+    assert client.post("/api/experiments/jobs/nope/review", json={"better": "tie"}).status_code == 404
+
+
+
+def test_project_sets_its_own_judge_key_and_model(client):
+    from unittest.mock import patch
+
+    from imagent_server import judge
+
+    pid = client.post("/api/projects", json={"name": "Judge cfg"}).json()["id"]
+    assert client.get("/api/judge", params={"project": pid}).json()["configured"] is False
+
+    p = client.patch(f"/api/projects/{pid}", json={"judge_key": "sk-or-v1-secretsecret1234", "judge_model": "anthropic/claude-opus-5.5"}).json()
+    assert p["judge_key_hint"] == "sk-or-…1234" and "judge_key" not in p                # never echoed back
+    assert "secretsecret" not in str(client.get(f"/api/projects/{pid}").json())
+    assert "secretsecret" not in str(client.get("/api/projects").json())
+    st = client.get("/api/judge", params={"project": pid}).json()
+    assert st == {"configured": True, "model": "anthropic/claude-opus-5.5", "source": "project", "base_url": "https://openrouter.ai/api/v1"}
+
+    calls = []
+    with patch.object(judge, "_call", side_effect=lambda m, cfg=None: calls.append(cfg) or ('{"ok": true}', 0.0001)):
+        assert client.post(f"/api/projects/{pid}/judge/test", json={}).json()["ok"] is True             # the saved key
+        client.post(f"/api/projects/{pid}/judge/test", json={"key": "sk-new", "model": "x/y"})          # a key not saved yet
+    assert calls[0]["key"] == "sk-or-v1-secretsecret1234" and calls[1] == {**calls[1], "key": "sk-new", "model": "x/y"}
+
+    client.patch(f"/api/projects/{pid}", json={"judge_key": ""})                           # remove it
+    assert client.get("/api/judge", params={"project": pid}).json()["configured"] is False
+    assert client.post(f"/api/projects/{pid}/judge/test", json={}).json()["ok"] is False
+
+
+def test_live_jobs_wait_for_a_live_connection(client):
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exp_ = InMemorySpanExporter()
+    tp = TracerProvider(resource=Resource.create({"service.name": "live-test"}))
+    tp.add_span_processor(SimpleSpanProcessor(exp_))
+    src = _agent_run(tp.get_tracer("imagent"), [], "ok")
+    _post_spans(client, exp_.get_finished_spans())
+
+    key = {"x-imagent-key": "ingest-secret"}
+    body = {"agent": "lbot", "project": "live-test", "source_trace_ids": [src], "variants": [{"name": "v", "model": "m"}]}
+    live = client.post("/api/experiments", json={**body, "tool_mode": "live"}).json()
+    claim = {"runner_id": "rl", "agents": [{"name": "lbot"}], "project": "live-test"}
+
+    # No live connection yet (the agent hasn't run since the app started): the live job waits.
+    assert client.post("/api/runner/claim", json={**claim, "live_agents": []}, headers=key).status_code == 204
+    # A recorded job for the same agent is not held back.
+    rec = client.post("/api/experiments", json=body).json()
+    got = client.post("/api/runner/claim", json={**claim, "live_agents": []}, headers=key).json()
+    assert got["experiment_id"] == rec["id"] and got["tool_mode"] == "recorded"
+    # Once the agent has run, the live job goes out.
+    got = client.post("/api/runner/claim", json={**claim, "live_agents": ["lbot"]}, headers=key).json()
+    assert got["experiment_id"] == live["id"] and got["tool_mode"] == "live"

@@ -1,24 +1,29 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { api, getReadKey, setReadKey } from "../lib/api";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { api, getReadKey, setReadKey, type ProjectList } from "../lib/api";
+import { currentProject, pp } from "../lib/project";
 import { parseTime, timeAgo } from "../lib/format";
 import { isTyping } from "../lib/keys";
 import { useAppState, useLatest } from "../lib/state";
+import { Logo } from "./Brand";
 import { CommandPalette } from "./CommandPalette";
 import { Icon } from "./icons";
 import { RangePicker } from "./RangePicker";
 import { controlCls } from "./ui";
 
+/** Pages of a project (paths are inside /p/:projectId). */
 const NAV = [
   { to: "/", label: "Overview", icon: Icon.overview, key: "o" },
+  { to: "/blueprint", label: "Blueprint", icon: Icon.blueprint, key: "b" },
   { to: "/traces", label: "Traces", icon: Icon.traces, key: "t" },
   { to: "/experiments", label: "Experiments", icon: Icon.experiments, key: "e" },
+  { to: "/settings", label: "Settings", icon: Icon.settings, key: "s" },
 ];
 
 export function Layout() {
-  const { project, setProject, refresh, autoRefresh, setAutoRefresh, theme, toggleTheme, range } = useAppState();
-  const projects = useQuery({ queryKey: ["projects"], queryFn: () => api<string[]>("/api/projects") });
+  const { refresh, autoRefresh, setAutoRefresh, theme, toggleTheme, range } = useAppState();
+  const inProject = !!currentProject(useLocation().pathname);
   const [keyOpen, setKeyOpen] = useState(false);
   const navigate = useNavigate();
 
@@ -33,7 +38,8 @@ export function Layout() {
       }
       if (Date.now() - pending < 1000) {
         const hit = NAV.find((n) => n.key === e.key);
-        if (hit) navigate(hit.to);
+        if (hit && currentProject()) navigate(pp(hit.to));
+        else if (e.key === "p") navigate("/");
         pending = 0;
       }
     };
@@ -45,14 +51,12 @@ export function Layout() {
     <div className="flex h-full min-h-0">
       <aside className="hidden w-[200px] shrink-0 flex-col border-r border-line bg-panel md:flex">
         <div className="flex h-12 items-center gap-2 px-4">
-          <span className="grid size-5 place-items-center rounded-[5px] bg-ink text-bg">
-            <svg viewBox="0 0 16 16" className="size-3" fill="currentColor"><circle cx="8" cy="3.6" r="1.6" /><rect x="6.6" y="6.4" width="2.8" height="7.4" rx="1.4" /></svg>
-          </span>
-          <span className="text-[13.5px] font-semibold tracking-[-0.01em]">imagent</span>
+          <Logo size={20} />
         </div>
+        <ProjectSwitcher />
         <nav className="flex flex-col gap-px px-2 pt-1">
-          {NAV.map((n) => (
-            <NavLink key={n.to} to={n.to} end={n.to === "/"}
+          {inProject && NAV.map((n) => (
+            <NavLink key={n.to} to={pp(n.to)} end={n.to === "/"}
               className={({ isActive }) =>
                 `group flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] ${isActive ? "bg-subtle font-medium text-ink" : "text-ink-2 hover:bg-hover hover:text-ink"}`}>
               {({ isActive }) => (
@@ -84,17 +88,12 @@ export function Layout() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4 md:px-6">
           <nav className="flex gap-1 md:hidden">
-            {NAV.map((n) => (
-              <NavLink key={n.to} to={n.to} end={n.to === "/"}
+            {inProject && NAV.map((n) => (
+              <NavLink key={n.to} to={pp(n.to)} end={n.to === "/"}
                 className={({ isActive }) => `rounded px-2 py-1 ${isActive ? "font-medium text-ink" : "text-ink-3"}`}>{n.label}</NavLink>
             ))}
           </nav>
-          <select aria-label="Project" value={project} onChange={(e) => setProject(e.target.value)}
-            className={`ghost ${controlCls} border-transparent bg-transparent font-medium hover:border-line`}>
-            <option value="">All projects</option>
-            {(projects.data ?? []).map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <div className="ml-auto flex items-center gap-2">
+          <div className={`ml-auto flex items-center gap-2 ${inProject ? "" : "hidden"}`}>
             <LastData />
             <RangePicker />
             <button onClick={refresh} title="Refresh" className="inline-flex size-7 items-center justify-center rounded-md border border-line text-ink-2 hover:border-line-strong hover:text-ink">
@@ -149,6 +148,60 @@ function KeyDialog({ onClose }: { onClose: () => void }) {
           <button className="h-7 rounded-md bg-ink px-3 font-medium text-bg" onClick={() => { setReadKey(value.trim()); window.location.reload(); }}>Save</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Top of the sidebar: the current project, a menu to switch, and the way back to all projects. */
+function ProjectSwitcher() {
+  const project = currentProject(useLocation().pathname);
+  const list = useQuery({ queryKey: ["projects"], queryFn: () => api<ProjectList>("/api/projects") });
+  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  const current = list.data?.projects.find((p) => p.id === project);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [open]);
+  if (!project) {
+    return (
+      <div className="px-2 pb-1">
+        <Link to="/" className="flex h-8 items-center gap-2.5 rounded-md bg-subtle px-2.5 text-[13px] font-medium text-ink">
+          <Icon.projects size={15} /> Projects
+        </Link>
+      </div>
+    );
+  }
+  return (
+    <div className="relative px-2 pb-2">
+      <button onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        className="flex h-10 w-full items-center gap-2.5 rounded-lg border border-line bg-bg px-2.5 text-left hover:border-line-strong">
+        <span className="grid size-6 shrink-0 place-items-center rounded-md bg-subtle text-[11.5px] font-semibold text-ink-2">
+          {(current?.name ?? project).slice(0, 1).toUpperCase()}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[12.5px] font-medium text-ink">{current?.name ?? project}</span>
+          <span className="block truncate text-[10.5px] text-ink-3">Project</span>
+        </span>
+        <Icon.chevronDown size={13} className="shrink-0 text-ink-3" />
+      </button>
+      {open && (
+        <div className="absolute inset-x-2 top-11 z-30 overflow-hidden rounded-lg border border-line bg-bg py-1 shadow-[0_12px_32px_-8px_rgb(0_0_0/0.3)]">
+          {(list.data?.projects ?? []).map((p) => (
+            <button key={p.id} onClick={() => navigate(pp("/", p.id))}
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] hover:bg-hover ${p.id === project ? "font-medium text-ink" : "text-ink-2"}`}>
+              <span className="truncate">{p.name}</span>
+              {p.id === project && <Icon.check size={12} className="ml-auto shrink-0" />}
+            </button>
+          ))}
+          <div className="my-1 border-t border-line" />
+          <button onClick={() => navigate("/")} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] text-ink-2 hover:bg-hover">
+            All projects
+          </button>
+        </div>
+      )}
     </div>
   );
 }

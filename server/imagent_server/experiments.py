@@ -58,8 +58,15 @@ DDL = [
     """,
 ]
 
+DDL += [  # added later — ALTERed onto existing tables
+    f"ALTER TABLE {JOBS} ADD COLUMN IF NOT EXISTS judgement String DEFAULT ''",
+    f"ALTER TABLE {JOBS} ADD COLUMN IF NOT EXISTS review String DEFAULT ''",
+]
+
 _JOB_COLS = ["id", "experiment_id", "agent", "source_trace_id", "variant", "repeat", "status", "runner",
-             "result_trace_id", "error", "output", "score", "created_at", "claimed_at", "finished_at"]
+             "result_trace_id", "error", "output", "score", "created_at", "claimed_at", "finished_at",
+             "judgement", "review"]
+_TEXT_COLS = {"runner", "result_trace_id", "error", "output", "score", "judgement", "review"}
 _claim_lock = asyncio.Lock()
 # runner_id → {"last_seen": epoch, "agents": [...], "host": str}
 _runners: dict[str, dict[str, Any]] = {}
@@ -88,24 +95,29 @@ async def ensure_schema() -> None:
 
 async def _write_job(job: dict[str, Any]) -> None:
     client = await get_client()
-    row = [job.get(c) if c not in ("runner", "result_trace_id", "error", "output", "score") else (job.get(c) or "")
-           for c in _JOB_COLS]
+    row = [(job.get(c) or "") if c in _TEXT_COLS else job.get(c) for c in _JOB_COLS]
     await client.insert(JOBS, [row + [_version()]], column_names=[*_JOB_COLS, "updated_at"], settings={"async_insert": 0})
 
 
-async def _jobs(where: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-    return await query(f"SELECT {', '.join(_JOB_COLS)} FROM {JOBS} FINAL WHERE {where} ORDER BY created_at, id", params)
+async def _jobs(where: str, params: dict[str, Any], limit: int | None = None) -> list[dict[str, Any]]:
+    tail = f" LIMIT {int(limit)}" if limit else ""
+    return await query(f"SELECT {', '.join(_JOB_COLS)} FROM {JOBS} FINAL WHERE {where} ORDER BY created_at, id{tail}", params)
 
 
 # ── runners ──────────────────────────────────────────────────────────────────
-def touch_runner(runner_id: str, agents: list[dict[str, Any]], host: str) -> None:
-    _runners[runner_id] = {"last_seen": time.time(), "agents": agents, "host": host}
+def touch_runner(runner_id: str, agents: list[dict[str, Any]], host: str, project: str = "", ready: bool = True,
+                 live_agents: list[str] | None = None) -> None:
+    _runners[runner_id] = {"last_seen": time.time(), "agents": agents, "host": host, "project": project, "ready": ready,
+                           "live_agents": live_agents}
 
 
-def runners() -> list[dict[str, Any]]:
+def runners(project: str | None = None) -> list[dict[str, Any]]:
     now = time.time()
-    return [{"runner_id": rid, "host": r["host"], "agents": r["agents"], "seconds_ago": round(now - r["last_seen"], 1)}
-            for rid, r in _runners.items() if now - r["last_seen"] < RUNNER_STALE_SECONDS]
+    return [{"runner_id": rid, "host": r["host"], "project": r["project"], "agents": r["agents"], "ready": r.get("ready", True),
+             "live_agents": r.get("live_agents"),
+             "seconds_ago": round(now - r["last_seen"], 1)}
+            for rid, r in _runners.items()
+            if now - r["last_seen"] < RUNNER_STALE_SECONDS and (project is None or r["project"] == project)]
 
 
 # ── experiments ──────────────────────────────────────────────────────────────
@@ -123,7 +135,7 @@ async def create(*, name: str, agent: str, project: str, source_trace_ids: list[
         for v in variants:
             for r in range(repeats):
                 rows.append([uuid.uuid4().hex[:16], exp_id, agent, src, v["name"], r, "queued", "", "", "", "", "",
-                             now, None, None, _version()])
+                             now, None, None, "", "", _version()])
     await client.insert(JOBS, rows, column_names=[*_JOB_COLS, "updated_at"], settings={"async_insert": 0})
     return {"id": exp_id, "jobs": len(rows)}
 
@@ -158,14 +170,21 @@ def _history(spans: list[dict[str, Any]], root: dict[str, Any]) -> list[dict[str
     return msgs if isinstance(msgs, list) and all(isinstance(m, dict) for m in msgs) else []
 
 
-async def claim(runner_id: str, agents: list[dict[str, Any]], host: str) -> dict[str, Any] | None:
-    touch_runner(runner_id, agents, host)
+async def claim(runner_id: str, agents: list[dict[str, Any]], host: str, project: str = "",
+                ready: bool = True, live_agents: list[str] | None = None) -> dict[str, Any] | None:
+    """Hand the runner its next job: only for agents it registered, in its own project. Live-tool
+    jobs wait until the runner's app has a live connection for that agent (it ran since starting)."""
+    touch_runner(runner_id, agents, host, project, ready, live_agents)
     names = [a["name"] for a in agents]
-    if not names:
+    if not names or not ready:
         return None
     async with _claim_lock:
         await _reap_stale()
-        queued = await _jobs("status = 'queued' AND agent IN {names:Array(String)}", {"names": names})
+        live_ok = "" if live_agents is None else (
+            " AND (JSONExtractString(config, 'tool_mode') != 'live' OR agent IN {live:Array(String)})")
+        queued = await _jobs(f"status = 'queued' AND agent IN {{names:Array(String)}} AND experiment_id IN "
+                             f"(SELECT id FROM {EXPERIMENTS} FINAL WHERE project = {{project:String}}{live_ok})",
+                             {"names": names, "project": project, "live": live_agents or []})
         if not queued:
             return None
         job = queued[0]
@@ -227,6 +246,8 @@ async def detail(exp_id: str) -> dict[str, Any] | None:
     jobs = await _jobs("experiment_id = {id:String}", {"id": exp_id})
     for j in jobs:
         j["score"] = await _score(j)
+        j["judgement"] = json.loads(j["judgement"]) if j.get("judgement") else None
+        j["review"] = json.loads(j["review"]) if j.get("review") else None
     config = json.loads(exp["config"])
     sources = []
     for tid in config["source_trace_ids"]:
@@ -248,8 +269,10 @@ async def detail(exp_id: str) -> dict[str, Any] | None:
             "created_at": exp["created_at"], "config": config, "sources": sources, "jobs": jobs}
 
 
-async def list_experiments(limit: int = 50) -> list[dict[str, Any]]:
-    exps = await query(f"SELECT * FROM {EXPERIMENTS} FINAL ORDER BY created_at DESC LIMIT {{limit:UInt32}}", {"limit": limit})
+async def list_experiments(limit: int = 50, project: str | None = None) -> list[dict[str, Any]]:
+    where = "WHERE project = {project:String}" if project else ""
+    exps = await query(f"SELECT * FROM {EXPERIMENTS} FINAL {where} ORDER BY created_at DESC LIMIT {{limit:UInt32}}",
+                       {"limit": limit, "project": project or ""})
     if not exps:
         return []
     counts = await query(f"""
@@ -258,13 +281,50 @@ async def list_experiments(limit: int = 50) -> list[dict[str, Any]]:
         FROM {JOBS} FINAL WHERE experiment_id IN {{ids:Array(String)}} GROUP BY experiment_id
     """, {"ids": [e["id"] for e in exps]})
     by = {c["experiment_id"]: c for c in counts}
+    jobs = await _jobs("experiment_id IN {ids:Array(String)}", {"ids": [e["id"] for e in exps]})
     out = []
     for e in exps:
         cfg = json.loads(e["config"])
         out.append({"id": e["id"], "name": e["name"], "agent": e["agent"], "project": e["project"], "status": e["status"],
                     "created_at": e["created_at"], "variants": [v["name"] for v in cfg["variants"]],
                     "sources": len(cfg["source_trace_ids"]), "repeats": cfg["repeats"], "tool_mode": cfg["tool_mode"],
-                    "jobs": by.get(e["id"], {"total": 0, "done": 0, "failed": 0, "pending": 0})})
+                    "jobs": by.get(e["id"], {"total": 0, "done": 0, "failed": 0, "pending": 0}),
+                    "results": await _variant_results(cfg, [j for j in jobs if j["experiment_id"] == e["id"]])})
+    return out
+
+
+def quality(job: dict[str, Any]) -> str | None:
+    """Which answer is better for one replay: a person's review wins over the AI judge."""
+    for col in ("review", "judgement"):
+        raw = job.get(col)
+        d = json.loads(raw) if isinstance(raw, str) and raw else raw if isinstance(raw, dict) else None
+        if d and d.get("better") in ("new", "original", "tie"):
+            return d["better"]
+    return None
+
+
+async def _variant_results(cfg: dict[str, Any], jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Per variant: how its replays scored against the originals (for the list view)."""
+    out = []
+    for v in cfg["variants"]:
+        mine = [j for j in jobs if j["variant"] == v["name"]]
+        better = {"new": 0, "tie": 0, "original": 0}
+        for j in mine:
+            q = quality(j)
+            if q:
+                better[q] += 1
+        verdicts = {"match": 0, "partial": 0, "diverged": 0, "failed": 0}
+        cost = []
+        for j in mine:
+            if j["status"] == "error":
+                verdicts["failed"] += 1
+                continue
+            score = await _score(j) if j["status"] == "done" else None
+            if score:
+                verdicts[score["verdict"]] = verdicts.get(score["verdict"], 0) + 1
+                cost.append(score["metrics"].get("cost_usd") or 0)
+        out.append({"name": v["name"], "verdicts": verdicts, "total": len(mine), "better": better,
+                    "avg_cost": sum(cost) / len(cost) if cost else None})
     return out
 
 
@@ -280,7 +340,7 @@ async def cancel(exp_id: str) -> int:
 async def recent_sources(project: str | None, root_name: str, limit: int = 20) -> list[dict[str, Any]]:
     """Recent finished runs whose root span is `root_name` — candidates to replay."""
     params: dict[str, Any] = {"name": root_name, "limit": limit}
-    where = "is_root = 1 AND name = {name:String} AND NOT startsWith(thread_id, 'experiment:')"
+    where = "is_root = 1 AND name = {name:String} AND origin = ''"
     if project:
         params["project"] = project
         where += " AND project = {project:String}"
@@ -293,3 +353,39 @@ async def recent_sources(project: str | None, root_name: str, limit: int = 20) -
     return [{"trace_id": r["trace_id"], "project": r["project"], "start_time": r["start_time"], "thread_id": r["thread_id"],
              "input_text": compare.readable(r["input"], roles=("user", "human"))[:200],
              "output_text": compare.readable(r["output"])[:200]} for r in rows]
+
+
+# ── answer quality (judge + people) ───────────────────────────────────────────
+async def unjudged(limit: int = 5, projects: list[str] | None = None) -> list[dict[str, Any]]:
+    """Finished replays without a verdict — optionally only in these projects."""
+    where = "status = 'done' AND result_trace_id != '' AND judgement = ''"
+    if projects is not None:
+        if not projects:
+            return []
+        where += f" AND experiment_id IN (SELECT id FROM {EXPERIMENTS} FINAL WHERE project IN {{p:Array(String)}})"
+    return await _jobs(where, {"p": projects or []}, limit=limit)
+
+
+async def save_judgement(job_id: str, verdict: dict[str, Any]) -> None:
+    rows = await _jobs("id = {id:String}", {"id": job_id})
+    if rows:
+        await _write_job({**rows[0], "judgement": json.dumps(verdict)})
+
+
+async def save_review(job_id: str, better: str | None, note: str = "") -> bool:
+    """A person's verdict for one replay (None clears it)."""
+    rows = await _jobs("id = {id:String}", {"id": job_id})
+    if not rows:
+        return False
+    review = json.dumps({"better": better, "note": note[:1000], "at": _now().isoformat()}) if better else ""
+    await _write_job({**rows[0], "review": review})
+    return True
+
+
+async def rejudge(exp_id: str) -> int:
+    """Clear the AI verdicts of an experiment's replays so the judge runs again (reviews stay)."""
+    n = 0
+    for j in await _jobs("experiment_id = {id:String} AND judgement != ''", {"id": exp_id}):
+        await _write_job({**j, "judgement": ""})
+        n += 1
+    return n

@@ -2,7 +2,7 @@ import type { RunningRun, TraceSummary } from "../lib/api";
 import { RunningLabel } from "./Live";
 import { fmtCost, fmtDuration, fmtNum, shortId } from "../lib/format";
 import { Time } from "./Time";
-import { KindIcon, rowCls, StatusMark, td, th } from "./ui";
+import { KindIcon, rowCls, StatusMark, td, th, framedTable } from "./ui";
 
 /** Dense trace list. Rows are keyboard-selectable (`active`) and open via `onOpen`. */
 export function TraceTable({ items, onOpen, active = -1, showThread = true, indexOffset = 0, running, selected, onToggle }: {
@@ -16,8 +16,8 @@ export function TraceTable({ items, onOpen, active = -1, showThread = true, inde
   indexOffset?: number;
 }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[820px] border-separate border-spacing-0">
+    <div className="overflow-x-auto rounded-xl border border-line">
+      <table className={`${framedTable} min-w-[820px]`}>
         <thead>
           <tr>
             {onToggle && <th className={`${th} w-8 pl-3 pr-0`} aria-label="Select" />}

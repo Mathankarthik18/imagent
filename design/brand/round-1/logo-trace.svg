@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1120" viewBox="0 0 1800 1120">
+    <rect width="1800" height="1120" fill="#FFFFFF"/>
+    <text x="80" y="92" font-family="Helvetica Neue" font-size="34" font-weight="700" fill="#111" text-anchor="start">A · Trace</text>
+    <text x="80" y="128" font-family="Helvetica Neue" font-size="18" font-weight="400" fill="#5c5c5c" text-anchor="start">The i is a trace: a root node, the run it starts, the branch it spawns.</text>
+    <text x="1720" y="92" font-family="Helvetica Neue" font-size="16" font-weight="500" fill="#8a8a8a" text-anchor="end">Palette · Signal</text>
+
+    <!-- hero: mark on paper and on ink -->
+    <rect x="80" y="170" width="520" height="520" rx="28" fill="#F5F6F2"/>
+    <g transform="translate(180 270) scale(6.666666666666667)">
+    <rect x="11" y="6" width="9" height="9" fill="#B6F23C"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#0E1013" stroke-width="4" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#0E1013" stroke-width="4"/></g>
+    <rect x="630" y="170" width="520" height="520" rx="28" fill="#0E1013"/>
+    <g transform="translate(730 270) scale(6.666666666666667)">
+    <rect x="11" y="6" width="9" height="9" fill="#B6F23C"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#F5F5F5" stroke-width="4" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#F5F5F5" stroke-width="4"/></g>
+
+    <!-- lockups -->
+    <rect x="1180" y="170" width="540" height="250" rx="22" fill="#F5F6F2"/>
+    <g transform="translate(1236 259) scale(1.5)">
+    <rect x="11" y="6" width="9" height="9" fill="#3F6B06"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#0E1013" stroke-width="4" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#0E1013" stroke-width="4"/></g><g transform="translate(1323.84 284.92) scale(2.4)"><path d="M0 0V12" transform="translate(0 0)" fill="none" stroke="#0E1013" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><rect x="-1.8275" y="-6.427499999999999" width="3.655" height="3.655" fill="#3F6B06"/><path d="M0 12V0M0 4A4 4 0 0 1 8 4V12M8 4A4 4 0 0 1 16 4V12" transform="translate(4.46 0)" fill="none" stroke="#0E1013" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M12 0V12M12 6A6 6 0 1 0 12 6.01" transform="translate(24.060000000000002 0)" fill="none" stroke="#0E1013" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M12 0V15A5 5 0 0 1 7 20H2M12 6A6 6 0 1 0 12 6.01" transform="translate(39.660000000000004 0)" fill="none" stroke="#0E1013" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M0.4 6H12A6 6 0 1 0 10.1 10.4" transform="translate(55.260000000000005 0)" fill="none" stroke="#0E1013" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M0 12V0M0 4A4 4 0 0 1 8 4V12" transform="translate(70.86 0)" fill="none" stroke="#0E1013" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M1.6 -4V9A3 3 0 0 0 4.6 12H7M-1 0H6" transform="translate(82.46 0)" fill="none" stroke="#0E1013" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/></g>
+    <rect x="1180" y="440" width="540" height="250" rx="22" fill="#0E1013"/>
+    <g transform="translate(1236 529) scale(1.5)">
+    <rect x="11" y="6" width="9" height="9" fill="#B6F23C"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#F2F2F2" stroke-width="4" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#F2F2F2" stroke-width="4"/></g><g transform="translate(1323.84 554.92) scale(2.4)"><path d="M0 0V12" transform="translate(0 0)" fill="none" stroke="#F2F2F2" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><rect x="-1.8275" y="-6.427499999999999" width="3.655" height="3.655" fill="#B6F23C"/><path d="M0 12V0M0 4A4 4 0 0 1 8 4V12M8 4A4 4 0 0 1 16 4V12" transform="translate(4.46 0)" fill="none" stroke="#F2F2F2" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M12 0V12M12 6A6 6 0 1 0 12 6.01" transform="translate(24.060000000000002 0)" fill="none" stroke="#F2F2F2" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M12 0V15A5 5 0 0 1 7 20H2M12 6A6 6 0 1 0 12 6.01" transform="translate(39.660000000000004 0)" fill="none" stroke="#F2F2F2" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M0.4 6H12A6 6 0 1 0 10.1 10.4" transform="translate(55.260000000000005 0)" fill="none" stroke="#F2F2F2" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M0 12V0M0 4A4 4 0 0 1 8 4V12" transform="translate(70.86 0)" fill="none" stroke="#F2F2F2" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M1.6 -4V9A3 3 0 0 0 4.6 12H7M-1 0H6" transform="translate(82.46 0)" fill="none" stroke="#F2F2F2" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/></g>
+
+    <!-- app icons -->
+    <text x="80" y="760" font-family="Helvetica Neue" font-size="15" font-weight="600" fill="#1a1a1a" text-anchor="start">App icon</text>
+    <g transform="translate(80 780)"><rect width="96" height="96" rx="21.6" fill="#0E1013"/>
+      <g transform="translate(16.32 16.32) scale(1.32)">
+    <rect x="11" y="6" width="9" height="9" fill="#B6F23C"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#F5F5F5" stroke-width="4" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#F5F5F5" stroke-width="4"/></g></g>
+    <g transform="translate(196 796)"><rect width="64" height="64" rx="14.4" fill="#B6F23C"/>
+      <g transform="translate(10.88 10.88) scale(0.88)">
+    <rect x="11" y="6" width="9" height="9" fill="#0E1013"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#0E1013" stroke-width="4" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#0E1013" stroke-width="4"/></g></g>
+    <g transform="translate(280 812)"><rect width="32" height="32" rx="7.2" fill="#0E1013"/>
+      <g transform="translate(5.44 5.44) scale(0.44)">
+    <rect x="11" y="6" width="9" height="9" fill="#B6F23C"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#F5F5F5" stroke-width="4" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#F5F5F5" stroke-width="4"/></g></g>
+    <text x="420" y="760" font-family="Helvetica Neue" font-size="15" font-weight="600" fill="#1a1a1a" text-anchor="start">In the product · sidebar</text>
+    <rect x="420" y="780" width="300" height="56" rx="12" fill="#FAFAFA" stroke="#E6E6E6"/>
+    <g transform="translate(440 794) scale(0.5833333333333334)">
+    <rect x="11" y="6" width="9" height="9" fill="#3F6B06"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#141414" stroke-width="4" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#141414" stroke-width="4"/></g><g transform="translate(474.15999999999997 804.08) scale(0.9333333333333333)"><path d="M0 0V12" transform="translate(0 0)" fill="none" stroke="#141414" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><rect x="-1.8275" y="-6.427499999999999" width="3.655" height="3.655" fill="#3F6B06"/><path d="M0 12V0M0 4A4 4 0 0 1 8 4V12M8 4A4 4 0 0 1 16 4V12" transform="translate(4.46 0)" fill="none" stroke="#141414" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M12 0V12M12 6A6 6 0 1 0 12 6.01" transform="translate(24.060000000000002 0)" fill="none" stroke="#141414" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M12 0V15A5 5 0 0 1 7 20H2M12 6A6 6 0 1 0 12 6.01" transform="translate(39.660000000000004 0)" fill="none" stroke="#141414" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M0.4 6H12A6 6 0 1 0 10.1 10.4" transform="translate(55.260000000000005 0)" fill="none" stroke="#141414" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M0 12V0M0 4A4 4 0 0 1 8 4V12" transform="translate(70.86 0)" fill="none" stroke="#141414" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M1.6 -4V9A3 3 0 0 0 4.6 12H7M-1 0H6" transform="translate(82.46 0)" fill="none" stroke="#141414" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/></g>
+    <rect x="740" y="780" width="300" height="56" rx="12" fill="#141414"/>
+    <g transform="translate(760 794) scale(0.5833333333333334)">
+    <rect x="11" y="6" width="9" height="9" fill="#B6F23C"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#EDEDED" stroke-width="4" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#EDEDED" stroke-width="4"/></g><g transform="translate(794.16 804.08) scale(0.9333333333333333)"><path d="M0 0V12" transform="translate(0 0)" fill="none" stroke="#EDEDED" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><rect x="-1.8275" y="-6.427499999999999" width="3.655" height="3.655" fill="#B6F23C"/><path d="M0 12V0M0 4A4 4 0 0 1 8 4V12M8 4A4 4 0 0 1 16 4V12" transform="translate(4.46 0)" fill="none" stroke="#EDEDED" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M12 0V12M12 6A6 6 0 1 0 12 6.01" transform="translate(24.060000000000002 0)" fill="none" stroke="#EDEDED" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M12 0V15A5 5 0 0 1 7 20H2M12 6A6 6 0 1 0 12 6.01" transform="translate(39.660000000000004 0)" fill="none" stroke="#EDEDED" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M0.4 6H12A6 6 0 1 0 10.1 10.4" transform="translate(55.260000000000005 0)" fill="none" stroke="#EDEDED" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M0 12V0M0 4A4 4 0 0 1 8 4V12" transform="translate(70.86 0)" fill="none" stroke="#EDEDED" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M1.6 -4V9A3 3 0 0 0 4.6 12H7M-1 0H6" transform="translate(82.46 0)" fill="none" stroke="#EDEDED" stroke-width="2.15" stroke-linecap="butt" stroke-linejoin="miter"/></g>
+    <text x="1130" y="760" font-family="Helvetica Neue" font-size="15" font-weight="600" fill="#1a1a1a" text-anchor="start">Small sizes</text>
+    <g transform="translate(1130 822)"><g transform="scale(1.3333333333333333)">
+    <rect x="11" y="6" width="9" height="9" fill="#B6F23C"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#0E1013" stroke-width="4" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#0E1013" stroke-width="4"/></g>
+     <text x="32" y="90" font-family="Helvetica Neue" font-size="13" font-weight="400" fill="#8a8a8a" text-anchor="middle">64px</text></g><g transform="translate(1240 822)"><g transform="scale(0.6666666666666666)">
+    <rect x="11" y="6" width="9" height="9" fill="#B6F23C"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#0E1013" stroke-width="4" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#0E1013" stroke-width="4"/></g>
+     <text x="16" y="58" font-family="Helvetica Neue" font-size="13" font-weight="400" fill="#8a8a8a" text-anchor="middle">32px</text></g><g transform="translate(1350 822)"><g transform="scale(0.5)">
+    <rect x="11" y="6" width="9" height="9" fill="#B6F23C"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#0E1013" stroke-width="5" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#0E1013" stroke-width="5"/></g>
+     <text x="12" y="50" font-family="Helvetica Neue" font-size="13" font-weight="400" fill="#8a8a8a" text-anchor="middle">24px</text></g><g transform="translate(1460 822)"><g transform="scale(0.3333333333333333)">
+    <rect x="11" y="6" width="9" height="9" fill="#B6F23C"/>
+    <path d="M15.5 20V31A6 6 0 0 0 21.5 37H33" fill="none" stroke="#0E1013" stroke-width="5" stroke-linecap="butt"/>
+    <rect x="32.5" y="32.5" width="9" height="9" fill="none" stroke="#0E1013" stroke-width="5"/></g>
+     <text x="8" y="42" font-family="Helvetica Neue" font-size="13" font-weight="400" fill="#8a8a8a" text-anchor="middle">16px</text></g>
+    <g transform="translate(80 900)"><rect width="128" height="80" rx="10" fill="#0E1013" stroke="#00000014"/>
+      <text x="0" y="106" font-family="Helvetica Neue" font-size="14" font-weight="600" fill="#1a1a1a" text-anchor="start">Ink</text><text x="0" y="126" font-family="Helvetica Neue" font-size="13" font-weight="400" fill="#8a8a8a" text-anchor="start">#0E1013</text></g><g transform="translate(230 900)"><rect width="128" height="80" rx="10" fill="#F5F6F2" stroke="#00000014"/>
+      <text x="0" y="106" font-family="Helvetica Neue" font-size="14" font-weight="600" fill="#1a1a1a" text-anchor="start">Paper</text><text x="0" y="126" font-family="Helvetica Neue" font-size="13" font-weight="400" fill="#8a8a8a" text-anchor="start">#F5F6F2</text></g><g transform="translate(380 900)"><rect width="128" height="80" rx="10" fill="#B6F23C" stroke="#00000014"/>
+      <text x="0" y="106" font-family="Helvetica Neue" font-size="14" font-weight="600" fill="#1a1a1a" text-anchor="start">Signal</text><text x="0" y="126" font-family="Helvetica Neue" font-size="13" font-weight="400" fill="#8a8a8a" text-anchor="start">#B6F23C</text></g><g transform="translate(530 900)"><rect width="128" height="80" rx="10" fill="#3F6B06" stroke="#00000014"/>
+      <text x="0" y="106" font-family="Helvetica Neue" font-size="14" font-weight="600" fill="#1a1a1a" text-anchor="start">Signal (text)</text><text x="0" y="126" font-family="Helvetica Neue" font-size="13" font-weight="400" fill="#8a8a8a" text-anchor="start">#3F6B06</text></g><g transform="translate(680 900)"><rect width="128" height="80" rx="10" fill="#6B7068" stroke="#00000014"/>
+      <text x="0" y="106" font-family="Helvetica Neue" font-size="14" font-weight="600" fill="#1a1a1a" text-anchor="start">Graphite</text><text x="0" y="126" font-family="Helvetica Neue" font-size="13" font-weight="400" fill="#8a8a8a" text-anchor="start">#6B7068</text></g>
+  </svg>

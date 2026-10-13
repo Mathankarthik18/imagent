@@ -9,7 +9,12 @@ import { AppStateProvider } from "./lib/state";
 import { Compare } from "./pages/Compare";
 import { Dashboard } from "./pages/Dashboard";
 import { ExperimentDetail } from "./pages/ExperimentDetail";
+import { LegacyRedirect, ProjectScope } from "./lib/project";
+import { Blueprint } from "./pages/Blueprint";
+import { ProjectSettings } from "./pages/ProjectSettings";
+import { Projects } from "./pages/Projects";
 import { Experiments } from "./pages/Experiments";
+import { NewExperimentPage } from "./pages/NewExperimentPage";
 import { ThreadDetail } from "./pages/ThreadDetail";
 import { TraceDetail } from "./pages/TraceDetail";
 import { Traces } from "./pages/Traces";
@@ -32,15 +37,23 @@ createRoot(document.getElementById("root")!).render(
         <BrowserRouter>
           <Routes>
             <Route element={<Layout />}>
-              <Route index element={<Dashboard />} />
-              <Route path="traces" element={<Traces />} />
-              <Route path="traces/:traceId" element={<TraceDetail />} />
-              {/* Threads live under Traces (By thread); old links still land there. */}
-              <Route path="threads" element={<Navigate to="/traces" replace />} />
-              <Route path="threads/:threadId" element={<ThreadDetail />} />
-              <Route path="compare" element={<Compare />} />
-              <Route path="experiments" element={<Experiments />} />
-              <Route path="experiments/:experimentId" element={<ExperimentDetail />} />
+              <Route index element={<Projects />} />
+              <Route path="p/:projectId" element={<ProjectScope />}>
+                <Route index element={<Dashboard />} />
+                <Route path="traces" element={<Traces />} />
+                <Route path="traces/:traceId" element={<TraceDetail />} />
+                {/* Threads live under Traces (By thread); old links still land there. */}
+                <Route path="threads" element={<Navigate to="../traces" replace />} />
+                <Route path="threads/:threadId" element={<ThreadDetail />} />
+                <Route path="blueprint" element={<Blueprint />} />
+                <Route path="compare" element={<Compare />} />
+                <Route path="experiments" element={<Experiments />} />
+                <Route path="experiments/new" element={<NewExperimentPage />} />
+                <Route path="experiments/:experimentId" element={<ExperimentDetail />} />
+                <Route path="settings" element={<ProjectSettings />} />
+              </Route>
+              {/* Links from before projects (/traces/…) open in the last-used project. */}
+              <Route path="*" element={<LegacyRedirect />} />
             </Route>
           </Routes>
         </BrowserRouter>

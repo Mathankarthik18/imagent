@@ -36,7 +36,7 @@ def scripted_model(model: str, vessel: str):
 
 async def replay_email(job: imagent.ReplayJob) -> str:
     vessel = (job.input or {}).get("vessel", "UNKNOWN")
-    model = scripted_model(job.model or "smart", vessel)
+    model = scripted_model(job.model_for("router", "smart"), vessel)
 
     def call_model(state: MessagesState):
         return {"messages": [model.invoke(state["messages"])]}
@@ -56,7 +56,9 @@ async def replay_email(job: imagent.ReplayJob) -> str:
 async def main() -> None:
     imagent.init(service="bosun-demo", endpoint="http://localhost:8300", environment="dev")
     imagent.register_agent("demo_email", replay_email, source_root="process_email",
-                           description="Demo email router", models=["smart", "cheap"])
+                           description="Demo email router", models=["smart", "cheap"],
+                           model_slots=[{"key": "router", "label": "Router", "default": "smart",
+                                         "description": "The model that routes the email"}])
     print("runner started — create an experiment at http://localhost:8300/experiments")
     await imagent.runner.run_forever()
 

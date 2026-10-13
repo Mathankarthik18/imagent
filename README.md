@@ -46,26 +46,32 @@ cd sdk && uv venv -p 3.12 .venv && uv pip install -p .venv/bin/python -e '.[dev]
 
 Tests: `cd sdk && .venv/bin/pytest` · `cd server && .venv/bin/pytest` (API test needs ClickHouse up) · `cd ui && npm run typecheck`
 
-## Instrument an app
+## Add it to your app (3 steps)
 
-```python
-import imagent
-imagent.init(service="bosun", endpoint="http://localhost:8300")   # LangChain/LangGraph now traced
+1. In the imagent UI: **New project** → copy the project key.
+2. Install into your app's virtualenv (not the system Python — that gives
+   "externally-managed-environment") and set the key:
 
-with imagent.context(thread_id=gmail_thread_id, user_id=user.id, tags=["email"]):
-    await graph.ainvoke(...)
-```
+   ```bash
+   .venv/bin/pip install -e ~/imagent-monitor/sdk      # or: uv pip install -p .venv/bin/python -e ~/imagent-monitor/sdk
+   echo "IMAGENT_API_KEY=imk_…" >> .env       # + IMAGENT_ENDPOINT=… if imagent isn't on localhost:8300
+   ```
 
-Bosun already has an opt-in hook in `app/main.py`; to turn it on:
+3. At app startup:
 
-```bash
-cd ~/bosun_project/bosun && uv pip install -p venv/bin/python -e ~/imagent/sdk
-# .env
-IMAGENT_ENABLED=true
-IMAGENT_ENDPOINT=http://localhost:8300
-```
+   ```python
+   import imagent
+   imagent.init()
+   ```
 
-LangSmith keeps working in parallel; turn `LANGSMITH_TRACING` off once you're happy.
+That's it: every LangChain / LangGraph run is traced into the project, and each
+agent's blueprint (sub-agents, models, prompts, tools, middleware) is published on
+its first run. LangSmith keeps working in parallel.
+
+Optional extras: `imagent.context(thread_id=…, user_id=…)` to group runs into
+conversations, `@imagent.observe` for your own functions, and
+`imagent.register_agent(...)` + `imagent.runner.run_forever()` to let Experiments
+replay runs with another model.
 
 ## What gets captured
 

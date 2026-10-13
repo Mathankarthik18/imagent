@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useHotkey } from "../lib/keys";
 import { useAppState } from "../lib/state";
 import { Icon } from "./icons";
+import { pp } from "../lib/project";
 
 interface Cmd {
   id: string;
@@ -29,7 +30,7 @@ export function CommandPalette() {
   }, [open]);
 
   const commands = useMemo<Cmd[]>(() => {
-    const go = (path: string) => () => { navigate(path); setOpen(false); };
+    const go = (path: string) => () => { navigate(pp(path)); setOpen(false); };
     const term = q.trim();
     const dynamic: Cmd[] = [];
     if (term) {
@@ -40,8 +41,9 @@ export function CommandPalette() {
     const fixed: Cmd[] = [
       { id: "overview", label: "Go to Overview", hint: "g o", run: go("/") },
       { id: "traces", label: "Go to Traces", hint: "g t", run: go("/traces") },
+      { id: "blueprint", label: "Go to Blueprint", hint: "g b", run: go("/blueprint") },
       { id: "experiments", label: "Go to Experiments", hint: "g e", run: go("/experiments") },
-      { id: "new-experiment", label: "New experiment (replay runs with another model)", run: go("/experiments?new=1") },
+      { id: "new-experiment", label: "New experiment (replay runs with another model)", run: go("/experiments/new") },
       { id: "all-runs", label: "All runs (flat list)", run: go("/traces?view=list") },
       { id: "failures", label: "Show failed runs", run: go("/traces?view=list&status=error") },
       { id: "refresh", label: "Refresh data", run: () => { refresh(); setOpen(false); } },

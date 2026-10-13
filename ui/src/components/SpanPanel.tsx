@@ -40,7 +40,7 @@ export function SpanPanel({ span }: { span: Span }) {
     <Panel className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <div className="shrink-0 border-b border-line px-4 pb-3 pt-3.5">
         <div className="flex min-w-0 items-center gap-2">
-          <KindIcon kind={span.kind} size={15} />
+          <KindIcon kind={span.kind} name={span.name} size={15} />
           <h3 className="truncate text-[14px] font-semibold">{span.name}</h3>
           <span className="shrink-0 text-[12px] text-ink-3">{kindLabel(span.kind)}</span>
           {failed && <span className="ml-auto shrink-0 rounded px-1.5 py-px text-[11.5px] font-medium text-critical ring-1 ring-critical/30">Failed</span>}

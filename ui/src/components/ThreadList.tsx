@@ -2,7 +2,7 @@ import type { RunningRun, ThreadGroup } from "../lib/api";
 import { fmtCost, fmtDuration, fmtNum, fmtPct } from "../lib/format";
 import { RunningLabel } from "./Live";
 import { Time } from "./Time";
-import { Failures, rowCls, StatusMark, td, th } from "./ui";
+import { Failures, rowCls, StatusMark, td, th, framedTable } from "./ui";
 
 /** Human title for a thread: its opening message, else the agent/entry point. */
 export function threadTitle(g: ThreadGroup): string {
@@ -26,8 +26,8 @@ export function ThreadList({ items, onOpen, active = -1, running, detailed = fal
 }) {
   const maxCost = Math.max(...items.map((t) => t.cost_usd), 0);
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[860px] border-separate border-spacing-0">
+    <div className="overflow-x-auto rounded-xl border border-line">
+      <table className={`${framedTable} min-w-[860px]`}>
         <thead>
           <tr>
             <th className={`${th} w-8 pl-3 pr-0`} aria-label="Status" />

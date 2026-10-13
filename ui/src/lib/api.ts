@@ -287,10 +287,23 @@ export interface Comparison {
   names: { a: string; b: string };
 }
 
-export interface RunnerAgent { name: string; source_root: string; description: string; read_tools: string[]; models: string[] }
-export interface Runner { runner_id: string; host: string; agents: RunnerAgent[]; seconds_ago: number }
+/** A role the agent can run on its own model (orchestrator, sub-agents, ...). */
+export interface ModelSlot { key: string; label: string; default: string; description: string }
+export interface RunnerAgent { name: string; source_root: string; description: string; read_tools: string[]; models: string[]; model_slots?: ModelSlot[]; auto?: boolean; ready?: boolean }
+export interface Runner { runner_id: string; host: string; agents: RunnerAgent[]; seconds_ago: number; ready?: boolean; live_agents?: string[] | null }
 
-export interface Variant { name: string; model: string }
+/** model: one model for the whole run; models: per-slot picks (unset slots keep the app default). */
+export interface Variant { name: string; model: string; models?: Record<string, string> }
+
+const shortModel = (m: string) => m.split("/").pop() ?? m;
+
+/** One-line description of a variant's models, e.g. "Sub-agents: glm-5.3-flash · calculation: o4". */
+export function variantModels(v: Variant, slots?: ModelSlot[]): string {
+  const picks = Object.entries(v.models ?? {}).filter(([, m]) => m);
+  if (!picks.length) return v.model || "app default";
+  const label = (k: string) => slots?.find((s) => s.key === k)?.label ?? k;
+  return picks.map(([k, m]) => `${label(k)}: ${shortModel(m)}`).join(" · ");
+}
 
 export interface JobScore {
   verdict: Verdict;
@@ -304,6 +317,14 @@ export interface JobScore {
   output: string;
 }
 
+export type Better = "new" | "original" | "tie";
+export type CriteriaScores = Partial<Record<"correct" | "complete" | "clear" | "rubric", number>>;
+export interface Judgement {
+  better?: Better; reason?: string; model?: string; cost?: number; at?: string; error?: string;
+  scores?: Partial<Record<"original" | "new", CriteriaScores>>;
+}
+export interface JudgeStatus { configured: boolean; model: string; source: "project" | "server" | ""; base_url: string }
+
 export interface ExperimentJob {
   id: string;
   source_trace_id: string;
@@ -314,6 +335,10 @@ export interface ExperimentJob {
   error: string;
   output: string;
   score: JobScore | null;
+  /** AI judge: which answer is better (original run vs this replay). */
+  judgement: Judgement | null;
+  /** A person's verdict — overrides the judge. */
+  review: { better: Better; note: string; at: string } | null;
   created_at: string;
   finished_at: string | null;
 }
@@ -334,7 +359,7 @@ export interface Experiment {
   project: string;
   status: "running" | "done" | "failed";
   created_at: string;
-  config: { source_trace_ids: string[]; variants: Variant[]; repeats: number; tool_mode: "recorded" | "live_reads" };
+  config: { source_trace_ids: string[]; variants: Variant[]; repeats: number; tool_mode: "recorded" | "live_reads" | "live" };
   sources: ExperimentSource[];
   jobs: ExperimentJob[];
 }
@@ -350,12 +375,13 @@ export interface ExperimentSummary {
   repeats: number;
   tool_mode: string;
   jobs: { total: number; done: number; failed: number; pending: number };
+  results?: { name: string; verdicts: Record<Verdict, number>; total: number; avg_cost: number | null; better?: Record<Better, number> }[];
 }
 
-export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+export async function apiPost<T>(path: string, body: unknown, method: "POST" | "PATCH" = "POST"): Promise<T> {
   const key = getReadKey();
   const res = await fetch(path, {
-    method: "POST",
+    method,
     headers: { "content-type": "application/json", ...(key ? { "x-imagent-key": key } : {}) },
     body: JSON.stringify(body),
   });
@@ -371,3 +397,39 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   }
   return res.json() as Promise<T>;
 }
+
+// ── Blueprint: app structure read from the agent framework (imagent.publish_blueprint) ──
+export interface BpModel { name: string; class: string; provider: string; params?: Record<string, string | number | boolean> }
+export interface BpTool { name: string; description: string; args: string[]; builtin: boolean }
+export interface BpMiddleware { name: string; class: string; module: string; hooks: string[] }
+export interface BpAgent {
+  name: string; description: string; model: BpModel | null; system_prompt: string;
+  tools: BpTool[]; middleware: BpMiddleware[]; subagents: BpAgent[];
+  graph: { nodes: { id: string; type: string }[]; edges: { source: string; target: string; conditional: boolean }[] };
+}
+export interface BpToolStats { calls: number; errors: number; p50: number; p95: number; last_call: string }
+export interface BpAgentStats {
+  runs: number; errors: number; p50: number | null; p95: number | null; last_run: string | null; cost: number;
+  llm_calls: number; tokens: number; models: { model: string; calls: number; errors: number; cost: number; p50: number; p95: number }[];
+  tools: Record<string, BpToolStats>;
+}
+export interface BlueprintSummary {
+  project: string; name: string; framework: string; hash: string; versions: Record<string, string>;
+  model: string; agents: number; tools: number; first_seen: string; updated_at: string;
+}
+export interface Blueprint {
+  project: string; name: string; hash: string; first_seen: string; updated_at: string; days: number;
+  blueprint: { schema: number; framework: string; versions: Record<string, string>; root: BpAgent };
+  stats: Record<string, BpAgentStats>;
+}
+
+// ── projects ──
+export interface Project {
+  id: string; name: string; description: string; key_hint: string; archived: boolean; created_at: string; updated_at: string;
+  rubric?: string;
+  judge_model?: string; judge_base_url?: string; judge_key_hint?: string;
+  runs_24h?: number; cost_24h?: number; errors_24h?: number; runs_total?: number; last_trace?: string | null; services?: string[];
+}
+export interface ProjectList { projects: Project[]; unclaimed: { id: string; runs_total: number; last_trace: string | null }[] }
+/** Returned once, on create / rotate. */
+export type ProjectWithKey = Project & { key: string };

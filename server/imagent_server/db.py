@@ -15,7 +15,7 @@ DB = settings.clickhouse_database
 SPANS = f"{DB}.spans"
 RUNNING = f"{DB}.running_spans"
 RUNNING_COLUMNS = ["project", "trace_id", "span_id", "parent_span_id", "is_root", "name", "kind",
-                   "start_time", "thread_id", "user_id", "agent_name", "model"]
+                   "start_time", "thread_id", "user_id", "agent_name", "model", "origin", "service"]
 
 # Column order used by the ingest insert.
 COLUMNS = [
@@ -24,6 +24,17 @@ COLUMNS = [
     "thread_id", "user_id", "session_id", "agent_name",
     "model", "provider", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
     "cost_usd", "cost_source", "ttft_ms", "input", "output", "tags", "metadata", "attributes", "events",
+    "origin", "service",
+]
+
+# Added after the first release — ALTERed onto existing tables at startup.
+#   origin:  '' for production runs, 'experiment' for replays (they stay in their project)
+#   service: the app's OTel service.name (several services can feed one project)
+_MIGRATIONS = [
+    f"ALTER TABLE {SPANS} ADD COLUMN IF NOT EXISTS origin LowCardinality(String) DEFAULT ''",
+    f"ALTER TABLE {SPANS} ADD COLUMN IF NOT EXISTS service LowCardinality(String) DEFAULT ''",
+    f"ALTER TABLE {RUNNING} ADD COLUMN IF NOT EXISTS origin LowCardinality(String) DEFAULT ''",
+    f"ALTER TABLE {RUNNING} ADD COLUMN IF NOT EXISTS service LowCardinality(String) DEFAULT ''",
 ]
 
 _SCHEMA = [
@@ -116,11 +127,13 @@ async def get_client() -> AsyncClient:
 
 
 async def ensure_schema() -> None:
+    from .blueprints import DDL as BLUEPRINT_DDL
+    from .projects import DDL as PROJECT_DDL
     from .experiments import DDL as EXPERIMENT_DDL
     from .price_sync import DDL as PRICES_DDL
 
     client = await get_client()
-    for ddl in [*_SCHEMA, PRICES_DDL, *EXPERIMENT_DDL]:
+    for ddl in [*_SCHEMA, *_MIGRATIONS, PRICES_DDL, *EXPERIMENT_DDL, *BLUEPRINT_DDL, *PROJECT_DDL]:
         await client.command(ddl)
     logger.info("ClickHouse schema ready (%s)", SPANS)
 
