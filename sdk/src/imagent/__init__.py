@@ -18,7 +18,7 @@ from .blueprint import publish as publish_blueprint
 from .replay import model_override
 from .experiments import agent, experiment
 from .runner import ReplayJob, register_agent
-from .runtime import ImagentConfig, flush, get_config, init, shutdown
+from .runtime import ImagentConfig, flush, get_config, init, init_if_configured, shutdown
 
 
 def get_callback_handler():
@@ -44,6 +44,7 @@ __all__ = [
     "get_config",
     "context",
     "init",
+    "init_if_configured",
     "make_redactor",
     "observe",
     "shutdown",

@@ -108,6 +108,20 @@ imagent.init()   # every LangChain / LangGraph run is now traced into your proje
 That's it. Each agent's **blueprint** is published on its first run, and LangSmith (or anything
 else you use) keeps working in parallel.
 
+### Supported frameworks (switched on automatically when installed)
+
+| Framework | Traces | Blueprint | Experiments (recorded tools + model swap) |
+|---|---|---|---|
+| LangChain / LangGraph / **deepagents** | ✅ | ✅ full (sub-agents, middleware) | ✅ per agent |
+| **OpenAI Agents SDK** | ✅ agents, tools, handoffs | ✅ agents, tools, handoffs | ✅ per agent |
+| **LlamaIndex** agents / AgentWorkflow | ✅ | ✅ | ✅ per agent (on a copy) |
+| **CrewAI** | ✅ crew, agents, tools | ✅ agents + tasks | ✅ per agent |
+| **OpenAI SDK** (chat.completions, responses) | ✅ incl. streaming | — | ✅ model swap; tools via `@imagent.observe(kind="tool")` |
+| **Anthropic SDK** (messages) | ✅ incl. streaming | — | ✅ model swap; tools via `@imagent.observe(kind="tool")` |
+
+A model call is recorded once even when frameworks are stacked (e.g. LangChain's ChatOpenAI on
+top of the OpenAI SDK).
+
 > **Try it without an app:** `cd sdk && pip install -e . && python ../examples/demo_agents.py --runs 40 --api-key imk_…`
 > sends realistic multi-agent traces from fake models — zero LLM cost.
 

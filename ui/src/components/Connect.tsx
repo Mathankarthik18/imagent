@@ -25,7 +25,7 @@ export function ConnectSteps({ apiKey }: { apiKey?: string }) {
         text={"pip install -e ~/imagent-monitor/sdk\n# uv-made venv without pip:\nuv pip install -p .venv/bin/python -e ~/imagent-monitor/sdk"} />
       <Copyable label="2 · Add to your .env" text={env} />
       <Copyable label="3 · Add at app startup" text={"import imagent\nimagent.init()"} />
-      <p className="text-[12px] text-ink-3">That's it. Every LangChain / LangGraph run is traced, and each agent's blueprint appears on its first run.</p>
+      <p className="text-[12px] text-ink-3">That's it. Works with LangChain / LangGraph / deepagents, the OpenAI Agents SDK, LlamaIndex, CrewAI, and plain OpenAI / Anthropic SDK calls — every run is traced, and each agent's blueprint appears on its first run.</p>
     </div>
   );
 }

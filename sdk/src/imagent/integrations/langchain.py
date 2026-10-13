@@ -426,7 +426,35 @@ def install() -> ImagentCallbackHandler:
         # thread and task without anyone calling .set().
         _handler_var = ContextVar("imagent_langchain_handler", default=handler)
         register_configure_hook(_handler_var, inheritable=True)
+        _mark_chat_model_calls()
     return handler
+
+
+def _mark_chat_model_calls() -> None:
+    """While a LangChain chat model runs (and this handler records it), provider SDK
+    integrations underneath (openai / anthropic) don't record the same call again."""
+    from langchain_core.language_models.chat_models import BaseChatModel
+
+    from ._spans import provider_spans_off
+
+    orig_a, orig_s = BaseChatModel._agenerate_with_cache, BaseChatModel._generate_with_cache
+
+    async def agen(self, *args, **kwargs):
+        token = provider_spans_off.set(True)
+        try:
+            return await orig_a(self, *args, **kwargs)
+        finally:
+            provider_spans_off.reset(token)
+
+    def gen(self, *args, **kwargs):
+        token = provider_spans_off.set(True)
+        try:
+            return orig_s(self, *args, **kwargs)
+        finally:
+            provider_spans_off.reset(token)
+
+    BaseChatModel._agenerate_with_cache = agen  # type: ignore[method-assign]
+    BaseChatModel._generate_with_cache = gen  # type: ignore[method-assign]
 
 
 def current_run_span() -> Span | None:

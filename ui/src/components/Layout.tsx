@@ -58,10 +58,15 @@ export function Layout() {
           {inProject && NAV.map((n) => (
             <NavLink key={n.to} to={pp(n.to)} end={n.to === "/"}
               className={({ isActive }) =>
-                `group flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] ${isActive ? "bg-subtle font-medium text-ink" : "text-ink-2 hover:bg-hover hover:text-ink"}`}>
+                `group flex h-8 items-center gap-2.5 rounded-md pl-1.5 pr-2.5 text-[13px] ${isActive ? "bg-subtle font-medium text-ink" : "text-ink-2 hover:bg-hover hover:text-ink"}`}>
               {({ isActive }) => (
                 <>
-                  <n.icon size={15} className={isActive ? "text-ink" : "text-ink-3"} />
+                  {/* Active page: the icon as a brand tile — light glyph on ink, the node lit in ember (like the feature icons). */}
+                  <span className={`grid size-[22px] shrink-0 place-items-center rounded-[6px] transition-colors ${isActive
+                    ? "bg-[#121212] text-[#F5F5F2] shadow-[0_1px_2px_rgb(0_0_0/0.25)] [--icon-node:#FF5B2E] dark:bg-[#3A3936] dark:ring-1 dark:ring-white/15 dark:[--icon-node:#FF6B3D]"
+                    : "text-ink-3 group-hover:text-ink-2"}`}>
+                    <n.icon size={14} />
+                  </span>
                   {n.label}
                   <span className="ml-auto hidden font-mono text-[10.5px] text-ink-3 group-hover:inline">g {n.key}</span>
                 </>

@@ -384,6 +384,32 @@ def safe_configurable(configurable: dict[str, Any], overrides: dict[str, dict[st
 
 
 async def _replay_graph(graph: Any, job: Any, configurable: dict[str, Any]) -> str:
+    """Run the agent on the recorded conversation — dispatched on the framework that built it."""
+    from .blueprint import framework_of
+
+    fw = framework_of(graph)
+    if fw == "openai-agents":
+        from .integrations.openai_agents import run
+
+        return await run(graph, _needs_user(conversation(job.messages)))
+    if fw == "crewai":
+        from .integrations.crewai import run as run_crew
+
+        return await run_crew(graph, job)
+    if fw == "llamaindex":
+        from .integrations.llamaindex import run as run_li
+
+        return await run_li(graph, _needs_user(conversation(job.messages)))
+    return await _replay_langgraph(graph, job, configurable)
+
+
+def _needs_user(msgs: list[dict[str, str]]) -> list[dict[str, str]]:
+    if not msgs or msgs[-1]["role"] != "user":
+        raise ValueError("the recorded run has no user message to replay")
+    return msgs
+
+
+async def _replay_langgraph(graph: Any, job: Any, configurable: dict[str, Any]) -> str:
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.store.memory import InMemoryStore
 

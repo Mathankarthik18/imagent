@@ -209,7 +209,8 @@ def _versions() -> dict[str, str]:
     from importlib import metadata
 
     out = {}
-    for pkg in ("deepagents", "langgraph", "langchain", "langchain-core"):
+    for pkg in ("deepagents", "langgraph", "langchain", "langchain-core", "openai-agents", "crewai", "llama-index-core",
+                "openai", "anthropic"):
         try:
             out[pkg] = metadata.version(pkg)
         except metadata.PackageNotFoundError:
@@ -217,10 +218,37 @@ def _versions() -> dict[str, str]:
     return out
 
 
+def framework_of(agent: Any) -> str:
+    """Which framework built this agent object."""
+    mod = type(agent).__module__
+    for prefix, name in (("agents", "openai-agents"), ("crewai", "crewai"), ("llama_index", "llamaindex"),
+                         ("langgraph", "langgraph"), ("deepagents", "deepagents"), ("langchain", "langchain")):
+        if mod == prefix or mod.startswith(prefix + "."):
+            return name
+    return "unknown"
+
+
 def describe(agent: Any, name: str | None = None) -> dict[str, Any]:
-    """The full blueprint of an agent application (JSON-serialisable)."""
-    root = describe_agent(agent, name)
-    return {"schema": SCHEMA_VERSION, "framework": _framework(root), "versions": _versions(), "root": root}
+    """The full blueprint of an agent application (JSON-serialisable), whatever framework built it."""
+    fw = framework_of(agent)
+    if fw == "openai-agents":
+        from .integrations.openai_agents import describe_agent as describe_oa
+
+        root = describe_oa(agent)
+    elif fw == "crewai":
+        from .integrations.crewai import describe_crew
+
+        root = describe_crew(agent, name)
+    elif fw == "llamaindex":
+        from .integrations.llamaindex import describe_agent as describe_li
+
+        root = describe_li(agent, name)
+    else:
+        root = describe_agent(agent, name)
+        fw = _framework(root)
+    if name:
+        root["name"] = name
+    return {"schema": SCHEMA_VERSION, "framework": fw, "versions": _versions(), "root": root}
 
 
 def publish(agent: Any, name: str | None = None, *, background: bool = True) -> dict[str, Any] | None:
@@ -301,6 +329,11 @@ def _auto(graph: Any) -> None:
 
     if experiments._started:
         experiments.capture(graph, name)
+    seen_agent(graph, name)
+
+
+def seen_agent(graph: Any, name: str) -> None:
+    """A top-level agent is about to run (any framework): publish its blueprint the first time."""
     with _lock:
         if name in _known:
             return

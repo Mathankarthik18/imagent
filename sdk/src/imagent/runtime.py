@@ -196,6 +196,10 @@ def init(
             install()
         except ImportError:
             logger.debug("langchain-core not installed; skipping auto-instrumentation")
+    if cfg.auto_instrument_langchain:  # same switch: auto-instrument whatever frameworks are installed
+        from .integrations import auto_install
+
+        auto_install()
     from . import experiments
     from .blueprint import install_auto
 
@@ -207,6 +211,18 @@ def init(
     experiments._run_startup_builds()  # @imagent.agent builders declared before init()
     logger.info("imagent tracing → %s (service=%s)", cfg.endpoint, cfg.service)
     return cfg
+
+
+def init_if_configured(**kwargs: Any) -> ImagentConfig | None:
+    """``init()`` only when this process is pointed at an imagent server (IMAGENT_API_KEY or
+    IMAGENT_ENDPOINT set, in the environment or ./.env; IMAGENT_ENABLED=false turns it off).
+    Lets an app ship the integration everywhere and switch it on per machine."""
+    if (_env("ENABLED", "") or "").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    if not (kwargs.get("api_key") or kwargs.get("endpoint") or _env("API_KEY") or _env("ENDPOINT")):
+        logger.info("imagent off — set IMAGENT_ENDPOINT / IMAGENT_API_KEY to send traces")
+        return None
+    return init(**kwargs)
 
 
 def flush(timeout_millis: int = 10_000) -> bool:

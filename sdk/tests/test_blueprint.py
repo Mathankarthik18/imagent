@@ -91,3 +91,20 @@ def test_key_is_read_from_dotenv_when_not_in_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("IMAGENT_SERVICE", "from-env")
     assert runtime._env("SERVICE") == "from-env"  # the real environment wins
     monkeypatch.setattr(runtime, "_dotenv", None)
+
+
+def test_init_if_configured_only_connects_when_pointed_at_a_server(monkeypatch, tmp_path):
+    from imagent import runtime
+
+    monkeypatch.chdir(tmp_path)                      # no ./.env here
+    monkeypatch.setattr(runtime, "_dotenv", None)
+    for k in ("IMAGENT_API_KEY", "IMAGENT_ENDPOINT", "IMAGENT_ENABLED"):
+        monkeypatch.delenv(k, raising=False)
+    calls = []
+    monkeypatch.setattr(runtime, "init", lambda **kw: calls.append(kw) or "cfg")
+    assert runtime.init_if_configured() is None and calls == []
+    monkeypatch.setenv("IMAGENT_ENDPOINT", "http://imagent.local:8300")
+    assert runtime.init_if_configured() == "cfg"
+    monkeypatch.setenv("IMAGENT_ENABLED", "false")
+    assert runtime.init_if_configured() is None
+    monkeypatch.setattr(runtime, "_dotenv", None)

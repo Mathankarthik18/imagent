@@ -157,10 +157,33 @@ def observe(
                 finish(h, items)
             return gen_wrapper  # type: ignore[return-value]
 
+        def replayed(args: tuple, kwargs: dict, h: Any) -> tuple[bool, Any]:
+            """In an experiment, a tool answers from the recording instead of running."""
+            if kind != "tool":
+                return False, None
+            from . import replay
+
+            hit, result, mode = replay.intercept_tool(span_name, _bound_inputs(sig, args, kwargs))
+            if not hit:
+                return False, None
+            if h is not None:
+                h[1].set_attribute(sc.TAGS, [f"replay:mode:{mode}"])
+            try:  # recorded outputs are text; hand back structured data when that's what it was
+                import json
+
+                value: Any = json.loads(result)
+            except (ValueError, TypeError):
+                value = result
+            return True, value
+
         if inspect.iscoroutinefunction(fn):
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any):
                 h = start(args, kwargs)
+                hit, value = replayed(args, kwargs, h)
+                if hit:
+                    finish(h, value)
+                    return value
                 try:
                     result = await fn(*args, **kwargs)
                 except BaseException as e:
@@ -173,6 +196,10 @@ def observe(
         @functools.wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any):
             h = start(args, kwargs)
+            hit, value = replayed(args, kwargs, h)
+            if hit:
+                finish(h, value)
+                return value
             try:
                 result = fn(*args, **kwargs)
             except BaseException as e:

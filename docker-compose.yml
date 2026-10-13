@@ -38,7 +38,9 @@ services:
       IMAGENT_JUDGE_MODEL: ${IMAGENT_JUDGE_MODEL:-anthropic/claude-sonnet-5.5}
       IMAGENT_JUDGE_BASE_URL: ${IMAGENT_JUDGE_BASE_URL:-https://openrouter.ai/api/v1}
     ports:
-      - "127.0.0.1:8300:8300"
+      # Local-only by default. A server that other machines send to sets IMAGENT_BIND=0.0.0.0
+      # (and IMAGENT_READ_KEY) in ./.env — see deploy/server/README.md.
+      - "${IMAGENT_BIND:-127.0.0.1}:8300:8300"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8300/api/health', timeout=3)"]
       interval: 15s

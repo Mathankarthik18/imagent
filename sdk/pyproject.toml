@@ -1,7 +1,7 @@
 [project]
 name = "imagent"
 version = "0.1.0"
-description = "OpenTelemetry-native tracing for LLM agents (LangChain / LangGraph / custom code)"
+description = "OpenTelemetry-native tracing, blueprints and experiments for LLM agents (LangChain/LangGraph/deepagents, OpenAI Agents SDK, LlamaIndex, CrewAI, OpenAI/Anthropic SDKs)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -12,6 +12,12 @@ dependencies = [
 
 [project.optional-dependencies]
 langchain = ["langchain-core>=0.3.0"]
+# Each integration activates on its own when the framework is installed — these extras are optional.
+openai = ["openai>=1.40"]
+anthropic = ["anthropic>=0.40"]
+openai-agents = ["openai-agents>=0.2"]
+llamaindex = ["llama-index-core>=0.12"]
+crewai = ["crewai>=0.100"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

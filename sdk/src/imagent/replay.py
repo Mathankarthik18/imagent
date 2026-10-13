@@ -245,6 +245,35 @@ def _install_model_swap() -> None:
     BaseChatModel._generate_with_cache = gen  # type: ignore[method-assign]
 
 
+# ── hooks for non-LangChain integrations ──────────────────────────────────────
+def intercept_tool(name: str, args: Any) -> tuple[bool, str, str]:
+    """For a framework tool about to run: (intercepted, result, mode). When intercepted, return
+    ``result`` instead of running the tool — a recorded output, or a not-recorded/stubbed notice."""
+    st = _state.get()
+    if st is None:
+        return False, "", ""
+    mode, fixture = st.resolve(name, args)
+    if mode in ("passthrough", "live"):
+        if mode == "live":
+            st.events.append({"tool": name, "mode": mode, "args": canonical_args(args)})
+        return False, "", mode
+    st.events.append({"tool": name, "mode": mode, "args": canonical_args(args)})
+    return True, (fixture["output"] if fixture else (STUBBED if mode == "stubbed" else NOT_RECORDED)), mode
+
+
+def swap_model(agent: str, current: str, *, base_url: str = "") -> str | None:
+    """The experiment's model for a call by ``agent`` (None: keep ``current``)."""
+    st = _state.get()
+    if st is None:
+        return None
+    name = st.models.get(agent or st.root_agent) or st.model
+    if not name:
+        return None
+    if name.startswith("openrouter/") and "openrouter.ai" in base_url:
+        name = name[len("openrouter/"):]
+    return name if name != current else None
+
+
 class activate:
     """``with activate(state): ...`` — tool calls inside are replayed."""
 
