@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { ApiError, getReadKey, setReadKey } from "../lib/api";
 import { Icon, KindIcon } from "./icons";
 
 export { KindIcon };
@@ -57,11 +58,32 @@ export function Spinner({ label = "Loading" }: { label?: string }) {
 }
 
 export function ErrorBox({ error }: { error: unknown }) {
+  // 401: this server requires a read key — ask for it right here instead of just failing.
+  if (error instanceof ApiError && error.status === 401) return <KeyPrompt />;
   const msg = error instanceof Error ? error.message : String(error);
   return (
     <div className="my-4 rounded-md border border-critical/30 px-3 py-2 text-critical">
       Couldn't load this view — {msg}
     </div>
+  );
+}
+
+function KeyPrompt() {
+  const [value, setValue] = useState("");
+  const had = !!getReadKey();
+  return (
+    <form className="my-4 max-w-lg rounded-lg border border-line px-4 py-3.5"
+      onSubmit={(e) => { e.preventDefault(); if (value.trim()) { setReadKey(value.trim()); window.location.reload(); } }}>
+      <div className="text-[13px] font-semibold">{had ? "This access key doesn't work" : "This imagent needs an access key"}</div>
+      <p className="mt-1 text-[12.5px] text-ink-3">
+        Ask whoever runs this server, or on the server: <span className="font-mono text-ink-2">grep IMAGENT_READ_KEY ~/imagent-monitor/.env</span>.
+        This browser remembers it.
+      </p>
+      <div className="mt-3 flex gap-2">
+        <input autoFocus type="password" className={`${controlCls} flex-1 font-mono`} placeholder="imr_…" value={value} onChange={(e) => setValue(e.target.value)} />
+        <button type="submit" disabled={!value.trim()} className="h-7 rounded-md bg-ink px-3 text-[12.5px] font-medium text-bg disabled:opacity-40">Unlock</button>
+      </div>
+    </form>
   );
 }
 
