@@ -71,36 +71,62 @@ async def list_blueprints(project: str | None = None) -> list[dict[str, Any]]:
     return out
 
 
+def agent_names(node: dict[str, Any]) -> list[str]:
+    """The agent and every sub-agent under it, depth first."""
+    return [n for n in [node.get("name") or ""] if n] + [x for c in node.get("subagents") or [] for x in agent_names(c)]
+
+
 async def get(project: str, name: str, days: int = 7) -> dict[str, Any] | None:
     rows = await query(f"SELECT hash, blueprint, first_seen, updated_at FROM {BLUEPRINTS} FINAL "
                        f"WHERE project = {{p:String}} AND name = {{n:String}}", {"p": project, "n": name})
     if not rows:
         return None
     r = rows[0]
+    bp = json.loads(r["blueprint"])
     return {"project": project, "name": name, "hash": r["hash"], "first_seen": r["first_seen"],
-            "updated_at": r["updated_at"], "blueprint": json.loads(r["blueprint"]),
-            "stats": await stats(project, days), "days": days}
+            "updated_at": r["updated_at"], "blueprint": bp,
+            "stats": await stats(project, days, agent_names(bp.get("root") or {})), "days": days}
 
 
-async def stats(project: str, days: int) -> dict[str, Any]:
-    """Live numbers per agent / model / tool from the project's spans in the window."""
+async def stats(project: str, days: int, names: list[str] | None = None) -> dict[str, Any]:
+    """Live numbers per agent / model / tool from the project's spans in the window.
+
+    A model or tool call belongs to the agent whose graph ran it: its parent is a graph node
+    ("model", "tools") and that node's parent is the agent's run span. Owning by the tree works
+    for spans recorded before the SDK stamped sub-agents correctly (their ``agent_name`` was the
+    main agent's); LangChain's ``lc_agent_name`` and the ``agent_name`` column are fallbacks."""
+    names = sorted(set(names or []))
     where = "project = {p:String} AND origin = '' AND start_time >= now() - toIntervalDay({d:UInt32})"
-    # Older spans have an empty agent_name column; LangChain still put the agent in metadata.
-    who = "if(agent_name != '', agent_name, JSONExtractString(metadata, 'lc_agent_name'))"
-    params = {"p": project, "d": days}
+    params = {"p": project, "d": days, "names": names}
+    # A main agent's run is an `agent` span; a deepagents sub-agent run is a `chain` (older SDKs)
+    # or `agent` span named after it, under the `task` tool.
+    runs_of = f"kind IN ('agent', 'chain') AND name IN {{names:Array(String)}}"
+    owner = f"""(SELECT n.span_id AS node_id, any(a.name) AS owner
+                 FROM (SELECT span_id, parent_span_id FROM {SPANS} WHERE {where} AND kind = 'node') AS n
+                 INNER JOIN (SELECT span_id, name FROM {SPANS} WHERE {where} AND {runs_of}) AS a
+                   ON n.parent_span_id = a.span_id
+                 GROUP BY n.span_id)"""
+    who = ("multiIf(o.owner != '', o.owner, JSONExtractString(s.metadata, 'lc_agent_name') != '', "
+           "JSONExtractString(s.metadata, 'lc_agent_name'), s.agent_name)")
     agents = await query(f"""
         SELECT name, kind, count() AS runs, countIf(status = 'error') AS errors,
                quantile(0.5)(duration_ms) AS p50, quantile(0.95)(duration_ms) AS p95, max(start_time) AS last_run
         FROM {SPANS} WHERE {where} AND kind IN ('agent', 'chain') AND name != '' GROUP BY name, kind""", params)
     llm = await query(f"""
-        SELECT {who} AS agent, model, count() AS calls, countIf(status = 'error') AS errors,
-               sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens, sum(cost_usd) AS cost,
-               quantile(0.5)(duration_ms) AS p50, quantile(0.95)(duration_ms) AS p95
-        FROM {SPANS} WHERE {where} AND kind = 'llm' GROUP BY agent, model""", params)
+        SELECT {who} AS agent, s.model AS model, count() AS calls, countIf(s.status = 'error') AS errors,
+               sum(s.input_tokens) AS input_tokens, sum(s.output_tokens) AS output_tokens, sum(s.cost_usd) AS cost,
+               quantile(0.5)(s.duration_ms) AS p50, quantile(0.95)(s.duration_ms) AS p95
+        FROM (SELECT parent_span_id, model, status, input_tokens, output_tokens, cost_usd, duration_ms, metadata,
+                     agent_name FROM {SPANS} WHERE {where} AND kind = 'llm') AS s
+        LEFT JOIN {owner} AS o ON s.parent_span_id = o.node_id
+        GROUP BY agent, model""", params)
     tools = await query(f"""
-        SELECT {who} AS agent, name, count() AS calls, countIf(status = 'error') AS errors,
-               quantile(0.5)(duration_ms) AS p50, quantile(0.95)(duration_ms) AS p95, max(start_time) AS last_call
-        FROM {SPANS} WHERE {where} AND kind = 'tool' GROUP BY agent, name""", params)
+        SELECT {who} AS agent, s.name AS name, count() AS calls, countIf(s.status = 'error') AS errors,
+               quantile(0.5)(s.duration_ms) AS p50, quantile(0.95)(s.duration_ms) AS p95, max(s.start_time) AS last_call
+        FROM (SELECT parent_span_id, name, status, duration_ms, start_time, metadata, agent_name
+                     FROM {SPANS} WHERE {where} AND kind = 'tool') AS s
+        LEFT JOIN {owner} AS o ON s.parent_span_id = o.node_id
+        GROUP BY agent, name""", params)
 
     out: dict[str, dict[str, Any]] = {}
 
@@ -118,14 +144,14 @@ async def stats(project: str, days: int) -> dict[str, Any]:
     for t in tools:
         agent(t["agent"])["tools"][t["name"]] = {"calls": t["calls"], "errors": t["errors"], "p50": t["p50"],
                                                  "p95": t["p95"], "last_call": t["last_call"]}
-    # A main agent's run is an `agent` span; a deepagents sub-agent run is a `chain` span named after
-    # it (under the `task` tool). Prefer the agent span when a name has both.
+    # Prefer the agent span when a name has both kinds.
     by_name: dict[str, dict[str, Any]] = {}
     for a in agents:
         if a["kind"] == "agent" or a["name"] not in by_name:
             by_name[a["name"]] = a
+    known = set(names)
     for a in by_name.values():
-        if a["kind"] == "chain" and a["name"] not in out:
+        if a["kind"] == "chain" and a["name"] not in known and a["name"] not in out:
             continue  # LangGraph plumbing ("model", "tools", ...) — only count chains of known agents
         s = agent(a["name"])
         s.update(runs=a["runs"], errors=a["errors"], p50=a["p50"], p95=a["p95"], last_run=a["last_run"])

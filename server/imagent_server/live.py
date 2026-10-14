@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
+import logging
 from typing import Any
 
-from .db import RUNNING, SPANS, query
+from .config import settings
+from .db import RUNNING, SPANS, get_client, query
+
+logger = logging.getLogger("imagent.live")
 
 LOOKBACK_HOURS = 6        # older unfinished spans are treated as dead, not running
 STALL_SECONDS = 5 * 60    # no new span for this long → flagged stalled
+ORPHAN_GRACE_SECONDS = 120  # a step still open after its run ended: wait this long for its end, then close it
+REAP_EVERY_SECONDS = 60
 
 
 async def open_spans(*, project: str | None = None, trace_ids: list[str] | None = None,
-                     thread_id: str | None = None) -> list[dict[str, Any]]:
+                     thread_id: str | None = None, lookback_hours: int = LOOKBACK_HOURS) -> list[dict[str, Any]]:
     params: dict[str, Any] = {}
-    where = [f"start_time > now64(6) - INTERVAL {LOOKBACK_HOURS} HOUR"]
+    where = [f"start_time > now64(6) - INTERVAL {int(lookback_hours)} HOUR"]
     if project:
         params["project"] = project
         where.append("project = {project:String}")
@@ -29,7 +36,7 @@ async def open_spans(*, project: str | None = None, trace_ids: list[str] | None 
     w = " AND ".join(where)
     return await query(f"""
         SELECT project, trace_id, span_id, parent_span_id, is_root, name, kind, start_time,
-               thread_id, user_id, agent_name, model
+               thread_id, user_id, agent_name, model, origin, service
         FROM {RUNNING} FINAL
         WHERE {w}
           AND span_id NOT IN (SELECT span_id FROM {SPANS}
@@ -59,6 +66,7 @@ async def running_runs(project: str | None) -> dict[str, Any]:
         GROUP BY trace_id
     """, {"ids": list(by_trace)})
     done = {r["trace_id"]: r for r in done_rows}
+    timeout = settings.run_timeout_minutes * 60
 
     runs = []
     for trace_id, open_list in by_trace.items():
@@ -95,7 +103,81 @@ async def running_runs(project: str | None) -> dict[str, Any]:
             "stalled": (now - last_activity).total_seconds() > STALL_SECONDS,
         })
     runs.sort(key=lambda r: r["started"], reverse=True)
-    return {"runs": runs, "server_time": now.isoformat()}
+    return {"runs": runs, "server_time": now.isoformat(), "timeout_seconds": timeout}
+
+
+# ── reaper ───────────────────────────────────────────────────────────────────
+# A span only leaves "running" when its finished version arrives. If the app is restarted or
+# killed mid-run, a call hangs forever, or the end is lost, that never happens and the run would
+# sit in "Running now" indefinitely. The reaper closes such spans as failed so the run shows up
+# in the trace list with a clear reason. A real end arriving later still wins (newer inserted_at).
+
+_REAP_COLUMNS = ["project", "trace_id", "span_id", "parent_span_id", "is_root", "name", "kind", "status",
+                 "status_message", "start_time", "end_time", "duration_ms", "thread_id", "user_id",
+                 "agent_name", "model", "attributes", "origin", "service"]
+
+
+def reap_rows(spans: list[dict[str, Any]], done: dict[str, dict[str, Any]], now: dt.datetime,
+              timeout_s: float) -> list[list]:
+    """Closed-as-failed rows for open spans whose run is over: idle past the timeout, or
+    left behind by a run whose root already finished."""
+    by_trace: dict[str, list[dict[str, Any]]] = {}
+    for s in spans:
+        by_trace.setdefault(s["trace_id"], []).append(s)
+    rows: list[list] = []
+    minutes = round(timeout_s / 60)
+    for trace_id, open_list in by_trace.items():
+        d = done.get(trace_id) or {}
+        starts = [_utc(s["start_time"]) for s in open_list]
+        last_end = _utc(d["last_end"]) if d.get("last_end") else None
+        last_activity = max([*starts, *([last_end] if last_end else [])])
+        idle = (now - last_activity).total_seconds()
+        root_open = any(s["is_root"] for s in open_list)
+        if idle > timeout_s:
+            reason, why = "timeout", (f"Didn't finish: no activity for {minutes} min. The app was restarted or "
+                                      "stopped mid-run, or this call hung.")
+        elif d.get("root_done") and not root_open and idle > ORPHAN_GRACE_SECONDS:
+            reason, why = "orphan", "Never finished: the run ended while this step was still open (cancelled, or its end was lost)."
+        else:
+            continue
+        for s in open_list:
+            start = _utc(s["start_time"])
+            end = max(start, last_activity)
+            rows.append([s["project"], trace_id, s["span_id"], s["parent_span_id"], s["is_root"], s["name"],
+                         s["kind"], "error", why, start, end, (end - start).total_seconds() * 1000,
+                         s["thread_id"], s["user_id"], s["agent_name"], s["model"],
+                         {"imagent.reaped": reason}, s.get("origin", ""), s.get("service", "")])
+    return rows
+
+
+async def reap_once(timeout_s: float | None = None) -> int:
+    """Close abandoned spans from the last two days (the running table's TTL)."""
+    spans = await open_spans(lookback_hours=48)
+    if not spans:
+        return 0
+    ids = sorted({s["trace_id"] for s in spans})
+    done_rows = await query(f"""
+        SELECT trace_id, max(end_time) AS last_end, countIf(is_root = 1) > 0 AS root_done
+        FROM {SPANS} WHERE trace_id IN {{ids:Array(String)}} GROUP BY trace_id
+    """, {"ids": ids})
+    timeout = settings.run_timeout_minutes * 60 if timeout_s is None else timeout_s
+    rows = reap_rows(spans, {r["trace_id"]: r for r in done_rows}, dt.datetime.now(dt.timezone.utc), timeout)
+    if rows:
+        client = await get_client()
+        await client.insert(SPANS, rows, column_names=_REAP_COLUMNS)
+        logger.info("closed %d abandoned span(s) in %d run(s)", len(rows), len({r[1] for r in rows}))
+    return len(rows)
+
+
+async def reap_forever() -> None:
+    while True:
+        try:
+            await reap_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("reaping abandoned runs failed")
+        await asyncio.sleep(REAP_EVERY_SECONDS)
 
 
 _SPAN_DEFAULTS = {

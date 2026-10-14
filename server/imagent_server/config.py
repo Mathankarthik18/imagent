@@ -22,6 +22,8 @@ class Settings:
     # Keys are optional; when set, ingest needs the ingest key and the read API needs the read key.
     ingest_key: str = field(default_factory=lambda: os.getenv("IMAGENT_INGEST_KEY", ""))
     read_key: str = field(default_factory=lambda: os.getenv("IMAGENT_READ_KEY", ""))
+    # A run with no new span for this long is closed as failed (process restarted/killed, or a call hung).
+    run_timeout_minutes: int = field(default_factory=lambda: int(os.getenv("IMAGENT_RUN_TIMEOUT_MINUTES", "30")))
     stitch_enabled: bool = field(default_factory=lambda: os.getenv("IMAGENT_STITCH", "true").lower() != "false")
     price_sync: bool = field(default_factory=lambda: os.getenv("IMAGENT_PRICE_SYNC", "true").lower() != "false")
     price_source: str = field(default_factory=lambda: os.getenv("IMAGENT_PRICE_SOURCE", "https://openrouter.ai/api/v1/models"))

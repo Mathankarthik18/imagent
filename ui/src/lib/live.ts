@@ -9,13 +9,14 @@ export function useRunning() {
   const { project } = useAppState();
   const q = useQuery({
     queryKey: ["running", project],
-    queryFn: () => api<{ runs: RunningRun[]; server_time: string }>("/api/running", { project: project || undefined }),
+    queryFn: () => api<{ runs: RunningRun[]; server_time: string; timeout_seconds?: number }>("/api/running", { project: project || undefined }),
     refetchInterval: (query) => ((query.state.data?.runs.length ?? 0) > 0 ? 3_000 : 10_000),
     placeholderData: (prev) => prev,
   });
   const runs = q.data?.runs ?? [];
   return {
     runs,
+    timeoutSeconds: q.data?.timeout_seconds ?? 1800,
     byTrace: new Map(runs.map((r) => [r.trace_id, r])),
     byThread: new Map(runs.filter((r) => r.thread_id).map((r) => [r.thread_id, r])),
   };

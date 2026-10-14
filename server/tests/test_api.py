@@ -287,6 +287,62 @@ def test_running_runs_live_progress(client):
     proc.shutdown()
 
 
+def test_reaper_closes_runs_that_stopped_reporting(client):
+    """The app restarted mid-run: the run's spans never finish. After the timeout the reaper
+    closes them as failed, so the run leaves "Running now" and shows up as a failed trace."""
+    import time
+
+    from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.trace import set_span_in_context
+
+    from imagent.pending import PendingSpanProcessor
+    from imagent_server import live
+
+    pending = InMemorySpanExporter()
+    tp = TracerProvider(resource=Resource.create({"service.name": "reap-test"}))
+    proc = PendingSpanProcessor(pending, delay_s=0, interval_s=3600)
+    tp.add_span_processor(proc)
+    tr = tp.get_tracer("imagent")
+    root = tr.start_span("orchestrator", attributes={"imagent.span_kind": "agent", "imagent.root": True})
+    tr.start_span("glm", context=set_span_in_context(root), attributes={"imagent.span_kind": "llm"})
+    time.sleep(0.01)
+    proc.flush_pending()
+    client.post("/v1/traces", content=encode_spans(pending.get_finished_spans()).SerializeToString(),
+                headers={"content-type": "application/x-protobuf", "x-imagent-key": "ingest-secret"})
+    runs = client.get("/api/running", params={"project": "reap-test"}).json()["runs"]
+    assert len(runs) == 1
+    trace_id = runs[0]["trace_id"]
+
+    assert client.portal.call(live.reap_once) == 0  # within the timeout: still running
+    assert client.portal.call(live.reap_once, 0) == 2
+    assert client.get("/api/running", params={"project": "reap-test"}).json()["runs"] == []
+    detail = client.get(f"/api/traces/{trace_id}").json()
+    assert detail["running"] is False
+    assert {s["name"]: s["status"] for s in detail["spans"]} == {"orchestrator": "error", "glm": "error"}
+    assert all(s["status_message"].startswith("Didn't finish") for s in detail["spans"])
+    assert client.portal.call(live.reap_once, 0) == 0  # idempotent
+    proc.shutdown()
+
+
+def test_reap_rows_closes_steps_left_open_by_a_finished_run():
+    import datetime as dt
+
+    from imagent_server import live
+
+    now = dt.datetime.now(dt.timezone.utc)
+    span = {"project": "p", "trace_id": "t", "span_id": "s", "parent_span_id": "r", "is_root": 0, "name": "glm",
+            "kind": "llm", "start_time": now - dt.timedelta(minutes=10), "thread_id": "", "user_id": "",
+            "agent_name": "", "model": "", "origin": "", "service": "p"}
+    finished = {"t": {"last_end": now - dt.timedelta(minutes=9), "root_done": True}}
+    rows = live.reap_rows([span], finished, now, timeout_s=3600)
+    assert len(rows) == 1 and rows[0][7] == "error" and rows[0][8].startswith("Never finished")
+    assert live.reap_rows([span], {"t": {**finished["t"], "root_done": False}}, now, timeout_s=3600) == []
+    assert live.reap_rows([span], {"t": {"last_end": now, "root_done": True}}, now, timeout_s=3600) == []  # grace
+
+
 def test_reprice_fixes_unpriced_and_doubled_streamed_names(client):
     import datetime as dt
 
@@ -436,6 +492,17 @@ def test_blueprint_publish_and_live_stats(client):
             pass
         with tr.start_as_current_span("lookup_vessel", attributes={"imagent.span_kind": "tool", **who}):
             pass
+        # A sub-agent run as older SDKs recorded it: a `chain` under the `task` tool, every span
+        # inside still stamped with the main agent's name.
+        with tr.start_as_current_span("tools", attributes={"imagent.span_kind": "node", **who}):
+            with tr.start_as_current_span("task", attributes={"imagent.span_kind": "tool", **who}):
+                with tr.start_as_current_span("noon_agent", attributes={"imagent.span_kind": "chain", **who}):
+                    with tr.start_as_current_span("model", attributes={"imagent.span_kind": "node", **who}):
+                        with tr.start_as_current_span("y", attributes={"imagent.span_kind": "llm", "gen_ai.request.model": "y", **who}):
+                            pass
+                    with tr.start_as_current_span("tools", attributes={"imagent.span_kind": "node", **who}):
+                        with tr.start_as_current_span("noon_lookup", attributes={"imagent.span_kind": "tool", **who}):
+                            pass
     _post_spans(client, exp_.get_finished_spans())
 
     listed = [b for b in client.get("/api/blueprints").json() if b["project"] == "bp-test"]
@@ -445,6 +512,10 @@ def test_blueprint_publish_and_live_stats(client):
     s = got["stats"]["router"]
     assert s["runs"] == 1 and s["llm_calls"] == 1 and s["models"][0]["model"] == "x"
     assert s["tools"]["lookup_vessel"]["calls"] == 1 and "never_used" not in s["tools"]
+    assert "noon_lookup" not in s["tools"] and [m["model"] for m in s["models"]] == ["x"]
+    sub = got["stats"]["noon_agent"]
+    assert sub["runs"] == 1 and sub["llm_calls"] == 1 and sub["models"][0]["model"] == "y"
+    assert list(sub["tools"]) == ["noon_lookup"]
     assert client.get("/api/blueprints/bp-test/nope").status_code == 404
 
 

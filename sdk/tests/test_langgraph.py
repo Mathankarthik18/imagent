@@ -214,3 +214,45 @@ def test_streamed_call_metadata_is_not_doubled(spans):
     assert s.attributes[sc.GEN_AI_RESPONSE_MODEL] == "z-ai/glm-5.3-flash"
     assert list(s.attributes[sc.GEN_AI_RESPONSE_FINISH_REASONS]) == ["stop"]
     assert s.attributes[sc.GEN_AI_USAGE_INPUT_TOKENS] == 9
+
+
+def test_subagent_run_inside_a_tool_is_its_own_agent(spans):
+    """deepagents' `task` tool runs a sub-agent graph; its metadata still carries the outer
+    graph's `langgraph_node`, so it must be recognised by its own `lc_agent_name` — otherwise
+    every model/tool call inside it is credited to the main agent."""
+    inner_model = FakeToolModel(messages=iter([AIMessage(content="12.4 kn")]))
+
+    def inner_call(state: MessagesState):
+        return {"messages": [inner_model.invoke(state["messages"])]}
+
+    ig = StateGraph(MessagesState)
+    ig.add_node("model", inner_call)
+    ig.add_edge(START, "model")
+    inner = ig.compile(name="noon_agent").with_config({"metadata": {"lc_agent_name": "noon_agent"}})
+
+    @tool
+    def task(question: str) -> str:
+        """Ask the noon sub-agent."""
+        return inner.invoke({"messages": [HumanMessage(question)]})["messages"][-1].content
+
+    outer_model = FakeToolModel(messages=iter([
+        AIMessage(content="", tool_calls=[{"id": "c1", "name": "task", "args": {"question": "speed?"}}]),
+        AIMessage(content="done"),
+    ]))
+
+    def outer_call(state: MessagesState):
+        return {"messages": [outer_model.invoke(state["messages"])]}
+
+    g = StateGraph(MessagesState)
+    g.add_node("model", outer_call)
+    g.add_node("tools", ToolNode([task]))
+    g.add_edge(START, "model")
+    g.add_conditional_edges("model", tools_condition)
+    g.add_edge("tools", "model")
+    g.compile(name="main_agent").with_config({"metadata": {"lc_agent_name": "main_agent"}}).invoke(
+        {"messages": [HumanMessage("go")]})
+
+    sub = spans.by_name("noon_agent")
+    assert sub.attributes[sc.SPAN_KIND] == "agent"
+    llm = [s for s in spans.all() if s.attributes.get(sc.SPAN_KIND) == "llm"]
+    assert sorted(s.attributes[sc.GEN_AI_AGENT_NAME] for s in llm) == ["main_agent", "main_agent", "noon_agent"]

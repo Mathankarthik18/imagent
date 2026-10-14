@@ -75,6 +75,21 @@ class PendingSpanProcessor(SpanProcessor):
             logger.debug("pending span export failed", exc_info=True)
         return len(due)
 
+    def end_open(self, message: str = "The app stopped before this finished.") -> int:
+        """Close every span still open as failed — called on shutdown so a run cut off by a
+        restart shows as failed right away instead of looking like it is still running."""
+        with self._lock:
+            spans = [span for span, _ in self._open.values()]
+        for span in spans:
+            try:
+                if span.is_recording():
+                    span.set_status(Status(StatusCode.ERROR, message))
+                    span.set_attribute("imagent.interrupted", True)
+                    span.end()
+            except Exception:
+                logger.debug("closing open span failed", exc_info=True)
+        return len(spans)
+
     def _run(self) -> None:
         while not self._stop.wait(self._interval):
             self.flush_pending()

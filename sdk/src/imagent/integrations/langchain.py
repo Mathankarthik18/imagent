@@ -277,7 +277,11 @@ class ImagentCallbackHandler(BaseCallbackHandler):
             self._skip(run_id, parent_run_id)
             return
         md = metadata or {}
-        if _is_graph(serialized) or (parent_kept is not None and parent_kept.kind == "tool" and "langgraph_node" not in md):
+        # A sub-agent (e.g. deepagents' `task` tool running one) is a graph started inside a tool. Its
+        # metadata still carries the outer graph's `langgraph_node`, so recognise it by its own
+        # `lc_agent_name` — that makes it an agent and its model/tool calls get its name.
+        if (_is_graph(serialized) or md.get("lc_agent_name") == name
+                or (parent_kept is not None and parent_kept.kind == "tool" and "langgraph_node" not in md)):
             kind = "agent"
         elif md.get("langgraph_node") == name:
             kind = "node"

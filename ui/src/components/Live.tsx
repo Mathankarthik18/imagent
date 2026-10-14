@@ -1,12 +1,12 @@
 import type { RunningRun } from "../lib/api";
-import { fmtCost, fmtNum } from "../lib/format";
+import { fmtCost, fmtNum, parseTime } from "../lib/format";
 import { elapsed, useNow, useRunning } from "../lib/live";
 import { Icon, KindIcon } from "./icons";
 
 /** Pulsing dot: blue while running, amber-free red ring when stalled. */
 export function LiveDot({ stalled = false }: { stalled?: boolean }) {
   return stalled ? (
-    <span className="relative inline-flex size-2 shrink-0 rounded-full bg-critical/80" title="Stalled — no activity for 5 minutes" />
+    <span className="relative inline-flex size-2 shrink-0 rounded-full bg-critical/80" title="Stalled — no activity for 5 minutes. Closed as failed if it stays silent." />
   ) : (
     <span className="relative inline-flex size-2 shrink-0" title="Running">
       <span className="absolute inline-flex size-full animate-ping rounded-full bg-accent opacity-60" />
@@ -32,9 +32,15 @@ function stepLabel(run: RunningRun) {
   return { verb, name: c.kind === "llm" && c.model ? c.model : c.name };
 }
 
+/** Runs idle past the server's timeout are closed as failed; say when. */
+function closesIn(lastActivity: string, timeoutSeconds: number, now: number) {
+  const left = Math.ceil((parseTime(lastActivity).getTime() + timeoutSeconds * 1000 - now) / 60_000);
+  return left > 0 ? `closes as failed in ${left}m` : "closing as failed";
+}
+
 /** "Running now" strip shown above lists. Hidden when nothing is running. */
 export function RunningStrip({ onOpen, threadId }: { onOpen: (run: RunningRun) => void; threadId?: string }) {
-  const { runs: all } = useRunning();
+  const { runs: all, timeoutSeconds } = useRunning();
   const runs = threadId ? all.filter((r) => r.thread_id === threadId) : all;
   const now = useNow(runs.length > 0);
   if (runs.length === 0) return null;
@@ -61,7 +67,10 @@ export function RunningStrip({ onOpen, threadId }: { onOpen: (run: RunningRun) =
                 </div>
                 <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[12px] text-ink-3">
                   {r.stalled ? (
-                    <span className="text-critical">No activity for {elapsed(r.last_activity, now)} — stuck at {step.verb} {step.name}</span>
+                    <span className="truncate text-critical">
+                      No activity for {elapsed(r.last_activity, now)} — stuck at {step.verb} {step.name}
+                      <span className="text-ink-3"> · {closesIn(r.last_activity, timeoutSeconds, now)}</span>
+                    </span>
                   ) : (
                     <>
                       {r.path.slice(0, -1).map((p, i) => (

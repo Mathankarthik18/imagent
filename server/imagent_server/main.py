@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
         tasks.append(asyncio.create_task(price_sync.run_forever()))
     else:
         await db.query("SELECT 1")
+    tasks.append(asyncio.create_task(live.reap_forever()))  # close runs that stopped reporting
     tasks.append(asyncio.create_task(judge.worker()))  # judges projects that have a key (theirs or the server's)
     yield
     for t in tasks:

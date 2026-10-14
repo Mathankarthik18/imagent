@@ -33,3 +33,24 @@ def test_long_running_span_reported_once_while_open_fast_span_never():
         assert "fast" not in [s.name for s in pending.get_finished_spans()]
     finally:
         runtime.shutdown()
+
+
+def test_end_open_closes_spans_cut_off_by_shutdown():
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.trace import StatusCode
+
+    from imagent.pending import PendingSpanProcessor
+
+    done = InMemorySpanExporter()
+    tp = TracerProvider()
+    tp.add_span_processor(SimpleSpanProcessor(done))
+    proc = PendingSpanProcessor(InMemorySpanExporter(), delay_s=3600, interval_s=3600)
+    tp.add_span_processor(proc)
+    tp.get_tracer("t").start_span("run")
+    assert proc.end_open() == 1
+    [span] = done.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR and span.attributes["imagent.interrupted"] is True
+    assert proc.end_open() == 0
+    proc.shutdown()

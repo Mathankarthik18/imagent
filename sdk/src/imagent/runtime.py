@@ -99,6 +99,7 @@ class _State:
     def __init__(self, config: ImagentConfig, provider: TracerProvider):
         self.config = config
         self.provider = provider
+        self.pending: Any = None  # PendingSpanProcessor, when live progress is on
         self.tracer: Tracer = provider.get_tracer(sc.TRACER_NAME, "0.1.0")
 
 
@@ -176,6 +177,7 @@ def init(
 
     # Live progress: "started" snapshots of long-running spans go to the imagent server only.
     pending_exp = cfg.pending_exporter
+    pending = None
     if pending_exp is None and not cfg.exporters and cfg.pending_delay_s > 0:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
@@ -184,9 +186,11 @@ def init(
     if pending_exp is not None and cfg.pending_delay_s > 0:
         from .pending import PendingSpanProcessor
 
-        provider.add_span_processor(PendingSpanProcessor(pending_exp, delay_s=cfg.pending_delay_s))
+        pending = PendingSpanProcessor(pending_exp, delay_s=cfg.pending_delay_s)
+        provider.add_span_processor(pending)
 
     _state = _State(cfg, provider)
+    _state.pending = pending
     atexit.register(shutdown)
 
     if cfg.auto_instrument_langchain:
@@ -234,6 +238,8 @@ def shutdown() -> None:
     if _state is None:
         return
     try:
+        if _state.pending is not None:
+            _state.pending.end_open()
         _state.provider.shutdown()
     finally:
         _state = None
