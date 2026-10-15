@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 from typing import Any
 
 logger = logging.getLogger("imagent")
@@ -289,10 +290,14 @@ def publish(agent: Any, name: str | None = None, *, background: bool = True) -> 
 import contextvars
 
 _inside_run: contextvars.ContextVar[bool] = contextvars.ContextVar("imagent_inside_graph", default=False)
-_known: set[str] = set()   # agents already published — roots and every sub-agent inside them
+_sub_names: set[str] = set()       # sub-agents of published apps (never published as apps of their own)
+_merged: dict[str, dict[str, Any]] = {}   # app name → its structure, combined over every build in this process
+_sent: dict[str, str] = {}         # app name → fingerprint last sent
+_last_check: dict[str, float] = {}
 _lock = threading.Lock()
 _installed = False
 _publish = True
+REFRESH_SECONDS = 10.0             # re-read an app's structure at most this often
 
 
 def _nested() -> bool:
@@ -305,23 +310,70 @@ def _nested() -> bool:
     return var_child_runnable_config.get() is not None
 
 
+def _names(a: dict[str, Any]) -> list[str]:
+    return [a["name"], *(n for s in a.get("subagents") or [] for n in _names(s))]
+
+
+def _merge(old: dict[str, Any] | None, new: dict[str, Any]) -> dict[str, Any]:
+    """Combine two builds of the same app: the newest build wins for prompts, models and
+    descriptions; sub-agents, tools and middleware seen in either are kept (an app can build
+    different agents per request — the blueprint shows all of them)."""
+    if old is None:
+        return new
+
+    def union(a: list[dict[str, Any]], b: list[dict[str, Any]], merge: bool = False) -> list[dict[str, Any]]:
+        by = {x.get("name"): x for x in a}
+        out = []
+        for x in b:
+            out.append(_merge(by[x["name"]], x) if merge and x.get("name") in by else x)
+        seen = {x.get("name") for x in b}
+        out.extend(x for x in a if x.get("name") not in seen)
+        return out
+
+    return {**new, "tools": union(old.get("tools") or [], new.get("tools") or []),
+            "middleware": union(old.get("middleware") or [], new.get("middleware") or []),
+            "subagents": union(old.get("subagents") or [], new.get("subagents") or [], merge=True)}
+
+
+def _fingerprint(a: dict[str, Any]) -> str:
+    """The app's shape — agents, models, tools, middleware, graph — without prompt text, which
+    can carry per-request details (ids, directives) and would otherwise republish constantly."""
+    def shape(x: dict[str, Any]) -> Any:
+        return {"name": x["name"], "model": (x.get("model") or {}).get("name"),
+                "tools": sorted(t["name"] for t in x.get("tools") or []),
+                "middleware": sorted(m["name"] for m in x.get("middleware") or []),
+                "nodes": sorted(n["id"] for n in (x.get("graph") or {}).get("nodes") or []),
+                "subagents": sorted((shape(s) for s in x.get("subagents") or []), key=lambda y: y["name"])}
+    return hashlib.sha256(json.dumps(shape(a), sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def _refresh(graph: Any, name: str) -> None:
+    """Describe the app, fold it into what this process has built, and send it if its shape changed."""
+    try:
+        bp = describe(graph, name)
+    except Exception as exc:  # noqa: BLE001 — never break the host app
+        logger.debug("imagent blueprint skipped for %s: %s", name, exc)
+        return
+    with _lock:
+        merged = _merge(_merged.get(name), bp["root"])
+        _merged[name] = merged
+        _sub_names.update(n for n in _names(merged) if n != name)
+        fp = _fingerprint(merged)
+        if _sent.get(name) == fp:
+            return
+        _sent[name] = fp
+    _send({**bp, "root": merged})
+
+
 def publish_built(graph: Any, name: str) -> None:
     """Publish an agent the SDK built itself (at startup) — same as its first run would."""
     with _lock:
-        if name in _known:
-            return
-        _known.add(name)
-    bp = describe(graph, name)
-
-    def names(a: dict[str, Any]) -> list[str]:
-        return [a["name"], *(n for s in a["subagents"] for n in names(s))]
-    with _lock:
-        _known.update(names(bp["root"]))
-    _send(bp)
+        _last_check[name] = time.monotonic()
+    _refresh(graph, name)
 
 
 def _auto(graph: Any) -> None:
-    """Publish ``graph`` the first time it runs, unless it runs inside another agent."""
+    """Each top-level run keeps the app's blueprint current (unless it runs inside another agent)."""
     if _inside_run.get() or _nested():
         return
     name = str(getattr(graph, "name", None) or "agent")
@@ -333,23 +385,24 @@ def _auto(graph: Any) -> None:
 
 
 def seen_agent(graph: Any, name: str) -> None:
-    """A top-level agent is about to run (any framework): publish its blueprint the first time."""
-    with _lock:
-        if name in _known:
-            return
-        _known.add(name)
+    """A top-level agent was built or is about to run (any framework). The first time, its
+    blueprint is sent right away (so its sub-agents are known before they run); after that it's
+    re-read in the background at most every REFRESH_SECONDS and re-sent only when it changed —
+    an agent, tool or model added or removed shows up without a restart."""
     if not _publish:
         return
-    try:
-        bp = describe(graph, name)  # synchronous so its sub-agents are known before they run
-
-        def names(a: dict[str, Any]) -> list[str]:
-            return [a["name"], *(n for s in a["subagents"] for n in names(s))]
-        with _lock:
-            _known.update(names(bp["root"]))
-        _send(bp)
-    except Exception as exc:  # noqa: BLE001 — never break the host app
-        logger.debug("imagent auto-blueprint skipped for %s: %s", name, exc)
+    with _lock:
+        if name in _sub_names and name not in _merged:
+            return  # a sub-agent of an app we already publish
+        now = time.monotonic()
+        if now - _last_check.get(name, float("-inf")) < REFRESH_SECONDS:
+            return
+        _last_check[name] = now
+        first = name not in _merged
+    if first:
+        _refresh(graph, name)
+    else:
+        threading.Thread(target=_refresh, args=(graph, name), name="imagent-blueprint", daemon=True).start()
 
 
 def _send(bp: dict[str, Any]) -> None:

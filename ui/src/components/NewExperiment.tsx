@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, apiPost, type Blueprint, type BlueprintSummary, type BpAgent, type Runner } from "../lib/api";
 import { pp } from "../lib/project";
@@ -26,7 +26,8 @@ export function NewExperiment({ onClose, preselected = [], rootName, focusAgent 
 }) {
   const { project } = useAppState();
   const navigate = useNavigate();
-  const [step, setStep] = useState(0);
+  // Started from a run ("Try another model" on a trace): the run is already chosen — go straight to the agents.
+  const [step, setStep] = useState(preselected.length ? 1 : 0);
 
   // Agents: what connected runners offer, plus every agent with a blueprint (those queue until the app connects).
   const runners = useQuery({ queryKey: ["runners", project], queryFn: () => api<Runner[]>("/api/runners", { project }), refetchInterval: 5000 });
@@ -79,7 +80,8 @@ export function NewExperiment({ onClose, preselected = [], rootName, focusAgent 
   const usedAgents = useMemo(() => new Map((used.data ?? []).map((u) => [u.agent, u.runs])), [used.data]);
   const modelOptions = useModelOptions(project, tree.map((r) => r.model));
 
-  const [scope, setScope] = useState<"some" | "all">("some");
+  // One model for every agent is a column's "All →" in the matrix — no separate mode.
+  const scope = "some" as "some" | "all";
   const [perAgent, setPerAgent] = useState<Record<string, string>>(focusAgent ? { [focusAgent]: "" } : {});
   const [allModel, setAllModel] = useState("");
   const changes: Record<string, string> = Object.fromEntries(Object.entries(perAgent).map(([a, m]) => [a, m.trim()]).filter(([, m]) => m));
@@ -111,7 +113,7 @@ export function NewExperiment({ onClose, preselected = [], rootName, focusAgent 
   const jobs = runIds.length * repeats;
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div>
       <nav className="mb-2 text-[12.5px] text-ink-3">
         <button onClick={onClose} className="hover:text-ink">Experiments</button> /
       </nav>
@@ -183,14 +185,6 @@ export function NewExperiment({ onClose, preselected = [], rootName, focusAgent 
               {step === 1 && (
                 <Screen title="Which agents should use a different model?"
                   hint={`Your setup for ${agent?.name}. Agents you leave alone keep the model they run on today.`}>
-                  <div className="mb-4 inline-flex rounded-md bg-subtle p-0.5">
-                    {(["some", "all"] as const).map((m) => (
-                      <button key={m} onClick={() => setScope(m)}
-                        className={`h-7 rounded-[5px] px-3 text-[12.5px] font-medium ${scope === m ? "bg-bg text-ink shadow-[0_0_0_1px_var(--border)]" : "text-ink-3 hover:text-ink-2"}`}>
-                        {m === "some" ? "Change specific agents" : "One model for every agent"}
-                      </button>
-                    ))}
-                  </div>
                   {scope === "all" ? (
                     <div>
                       <ModelPicker autoFocus value={allModel} onChange={setAllModel} options={modelOptions} />
@@ -324,70 +318,199 @@ function Review({ label, onEdit, children }: { label: string; onEdit: () => void
   );
 }
 
-/** The agent tree with today's models. Click "Change model" on a row to pick its new model right there.
- *  Agents that never ran in the chosen runs are folded away — changing them would have no effect. */
+/** The agent × model matrix: one row per agent, one column per model. Click a cell to move that
+ *  agent to that model; a column's "All" moves every shown agent. Columns start as the models your
+ *  agents use today — add any other model as a new column. */
 function AgentSetup({ tree, usedAgents, usedKnown, runs, perAgent, setPerAgent, modelOptions }: {
   tree: TreeRow[]; usedAgents: Map<string, number>; usedKnown: boolean; runs: number;
   perAgent: Record<string, string>; setPerAgent: (f: (p: Record<string, string>) => Record<string, string>) => void; modelOptions: ModelOption[];
 }) {
-  const [showOthers, setShowOthers] = useState(false);
   const known = usedKnown && usedAgents.size > 0;
-  // The main agent always counts as used: it ran every one of these runs.
-  const isUsed = (r: TreeRow) => !known || r.depth === 0 || usedAgents.has(r.name);
-  const usedRows = tree.filter(isUsed);
-  const otherRows = tree.filter((r) => !isUsed(r));
-  const edit = (a: string, m: string | null) => setPerAgent((p) => { const n = { ...p }; if (m === null) delete n[a]; else n[a] = m; return n; });
+  const isUsed = (r: TreeRow) => !known || r.depth === 0 || usedAgents.has(r.name);  // the main agent ran every run
+  const [showAll, setShowAll] = useState(true);  // every agent and sub-agent by default
+  const [q, setQ] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [newModel, setNewModel] = useState("");
+  const focus = Object.entries(perAgent).find(([, m]) => !m.trim())?.[0];  // opened for one agent
 
-  const row = (r: TreeRow, dim: boolean) => {
-    const editing = r.name in perAgent;
-    const changed = !!perAgent[r.name]?.trim();
-    return (
-      <div key={r.name} className={`border-b border-line/70 px-3 py-2 last:border-0 ${changed ? "bg-accent-soft/30" : ""}`}>
-        <div className="flex items-center gap-2.5" style={{ paddingLeft: Math.min(r.depth, 3) * 18 }}>
-          <Tile role={r.depth === 0 ? "main" : "sub"} size={20} />
-          <div className={`min-w-0 flex-1 ${dim ? "opacity-60" : ""}`}>
-            <div className="truncate text-[13px] text-ink">{r.name}</div>
-            <div className="truncate text-[11.5px] text-ink-3">
-              <span className={`font-mono ${changed ? "line-through" : ""}`}>{r.model ? short(r.model) : "model unknown"}</span>
-              {known && r.depth > 0 && usedAgents.has(r.name) && <span> · ran in {usedAgents.get(r.name)} of {runs} runs</span>}
-            </div>
-          </div>
-          {!editing ? (
-            <button onClick={() => edit(r.name, "")}
-              className="h-7 shrink-0 rounded-md border border-line px-2.5 text-[12.5px] text-ink-2 hover:border-line-strong hover:text-ink">Change model</button>
-          ) : (
-            <div className="flex w-[300px] shrink-0 items-center gap-1.5">
-              <ModelPicker autoFocus={!changed} value={perAgent[r.name]} onChange={(m) => edit(r.name, m)} options={modelOptions}
-                placeholder="New model for this agent" className="flex-1" />
-              <button onClick={() => edit(r.name, null)} title="Keep today's model" aria-label={`Keep ${r.name} unchanged`}
-                className="grid size-7 shrink-0 place-items-center rounded-md text-ink-3 hover:bg-hover hover:text-ink"><Icon.close size={13} /></button>
-            </div>
-          )}
-        </div>
-      </div>
-    );
+  const today = useMemo(() => {
+    const seen: string[] = [];
+    for (const r of tree) if (r.model && !seen.includes(r.model)) seen.push(r.model);
+    return seen;
+  }, [tree]);
+  const [extra, setExtra] = useState<string[]>(() => Object.values(perAgent).map((m) => m.trim()).filter((m) => m && !today.includes(m)));
+  const columns = [...today, ...extra.filter((m) => !today.includes(m))];
+  // A newly added model column is shown right away, even when the table scrolls sideways.
+  const scroller = useRef<HTMLDivElement>(null);
+  const lastCount = useRef(columns.length);
+  useEffect(() => {
+    if (columns.length > lastCount.current && scroller.current) {
+      scroller.current.scrollTo({ left: scroller.current.scrollWidth, behavior: "smooth" });
+    }
+    lastCount.current = columns.length;
+  }, [columns.length]);
+
+  const hidden = tree.filter((r) => !isUsed(r)).length;
+  const rows = tree.filter((r) => (showAll || isUsed(r))
+    && (!q.trim() || r.name.toLowerCase().includes(q.trim().toLowerCase())));
+  const current = (r: TreeRow) => perAgent[r.name]?.trim() || r.model;
+  const set = (names: TreeRow[], model: string) => setPerAgent((p) => {
+    const n = { ...p };
+    for (const r of names) {
+      if (model === r.model) delete n[r.name]; else n[r.name] = model;  // back to today's model = no change
+    }
+    return n;
+  });
+  const changed = tree.filter((r) => perAgent[r.name]?.trim() && perAgent[r.name].trim() !== r.model);
+  const addColumn = () => {
+    const m = newModel.trim();
+    if (m && !columns.includes(m)) setExtra((e) => [...e, m]);
+    setNewModel("");
+    setAdding(false);
   };
+  const dropColumn = (m: string) => {  // agents moved to a removed model go back to today's
+    setExtra((e) => e.filter((x) => x !== m));
+    setPerAgent((p) => Object.fromEntries(Object.entries(p).filter(([, v]) => v.trim() !== m)));
+  };
+
+  // "+ Model" opens a floating panel (fixed position) so the scrolling table never clips it.
+  const addBtn = useRef<HTMLButtonElement>(null);
+  const [addAt, setAddAt] = useState<{ top: number; right: number } | null>(null);
+  const openAdd = () => {
+    const r = addBtn.current?.getBoundingClientRect();
+    if (r) setAddAt({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
+    setAdding(true);
+  };
+  const closeAdd = () => { setAdding(false); setNewModel(""); setAddAt(null); };
+  useEffect(() => {
+    if (!adding) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeAdd(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  // Opened for one agent (Try another model on a sub-agent): bring its row into view.
+  useEffect(() => {
+    if (!focus) return;
+    const row = scroller.current?.querySelector(`[data-agent="${CSS.escape(focus)}"]`);
+    row?.scrollIntoView({ block: "center" });
+  }, [focus, rows.length]);
+  const headTop = "sticky top-0";  // the model header stays in view while the agent list scrolls
 
   return (
     <div>
-      <div className="rounded-lg border border-line">{/* no overflow clip: the model dropdown hangs out of it */}
-        {known && (
-          <div className="rounded-t-lg border-b border-line bg-panel px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.05em] text-ink-3">
-            Ran in your {runs} run{runs === 1 ? "" : "s"} · {usedRows.length}
-          </div>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="relative">
+          <Icon.search size={13} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-3" />
+          <input className={`${controlCls} h-8 w-56 pl-7`} placeholder="Search agents" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        {known && hidden > 0 && (
+          <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-ink-3">
+            <input type="checkbox" className="accent-[var(--accent)]" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+            Include {hidden} that didn't run in these {runs} runs
+          </label>
         )}
-        {usedRows.map((r) => row(r, false))}
-        {otherRows.length > 0 && (
-          <>
-            <button onClick={() => setShowOthers((o) => !o)}
-              className="flex w-full items-center gap-1.5 border-t border-line bg-panel px-3 py-1.5 text-left text-[12px] text-ink-3 last:rounded-b-lg hover:text-ink">
-              <Icon.chevronRight size={11} className={`transition-transform ${showOthers ? "rotate-90" : ""}`} />
-              {otherRows.length} other agents didn't run in these runs — changing them has no effect
-            </button>
-            {showOthers && otherRows.map((r) => row(r, true))}
-          </>
-        )}
+        <span className="ml-auto text-[12.5px] text-ink-3">
+          {changed.length ? <>{changed.length} agent{changed.length === 1 ? "" : "s"} changed ·{" "}
+            <button onClick={() => setPerAgent(() => ({}))} className="text-accent hover:underline">Reset all</button></> : "Click a cell to change an agent's model"}
+        </span>
       </div>
+
+      <div ref={scroller} onScroll={() => adding && closeAdd()}
+        className="max-h-[calc(100vh-300px)] min-h-[320px] overflow-auto rounded-lg border border-line">
+        <table className="w-full border-separate border-spacing-0 text-[12.5px]">
+          <thead>
+            <tr className="bg-panel">
+              <th className={`${headTop} sticky left-0 z-[3] min-w-[170px] border-b border-line bg-panel px-3 py-2 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-ink-3`}>Agent</th>
+              {columns.map((m) => {
+                const on = rows.filter((r) => current(r) === m).length;
+                const isNew = !today.includes(m);
+                return (
+                  <th key={m} className={`${headTop} z-[2] min-w-[104px] border-b border-l border-line bg-panel px-2 py-1.5 align-bottom font-normal`}>
+                    <div className="flex items-center justify-center gap-1">
+                      <span className={`whitespace-nowrap font-mono text-[12px] ${isNew ? "text-accent" : "text-ink"}`} title={m}>{short(m)}</span>
+                      {isNew && <button onClick={() => dropColumn(m)} title="Remove this model" aria-label={`Remove ${m}`}
+                        className="grid size-4 place-items-center rounded text-ink-3 hover:text-ink"><Icon.close size={10} /></button>}
+                    </div>
+                    <div className="mt-0.5 flex items-center justify-center gap-1.5 text-[11px] text-ink-3">
+                      <span className="num">{on}</span>
+                      <button onClick={() => set(rows, m)} title={`Move every agent shown to ${m}`}
+                        className="rounded px-1 text-accent hover:bg-accent-soft">All →</button>
+                    </div>
+                  </th>
+                );
+              })}
+              {/* pinned to the right edge: always visible however many models there are */}
+              <th className={`${headTop} sticky right-0 z-[3] w-[1%] border-b border-l border-line bg-panel px-2 py-1.5 align-middle`}>
+                <button ref={addBtn} onClick={() => (adding ? closeAdd() : openAdd())} title="Add another model as a column"
+                  className={`whitespace-nowrap rounded-md border border-dashed px-2 py-1 text-[12px] ${adding ? "border-accent text-accent" : "border-line-strong text-ink-2 hover:border-ink-3 hover:text-ink"}`}>
+                  + Model
+                </button>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const now = current(r);
+              const isChanged = now !== r.model;
+              return (
+                <tr key={r.name} data-agent={r.name}
+                  className={isChanged ? "bg-accent-soft/25" : r.name === focus ? "bg-accent-soft/40 outline outline-1 -outline-offset-1 outline-accent/50" : ""}>
+                  <td className={`sticky left-0 z-[1] border-b border-line/70 px-3 py-1.5 ${isChanged ? "bg-[color-mix(in_srgb,var(--accent-soft)_25%,var(--bg))]" : "bg-bg"}`}>
+                    <div className="flex items-center gap-2" style={{ paddingLeft: Math.min(r.depth, 3) * 12 }}>
+                      <Tile role={r.depth === 0 ? "main" : "sub"} size={16} />
+                      <span className={`min-w-0 ${isUsed(r) ? "" : "opacity-60"}`}>
+                        <span className="block truncate">{r.name}</span>
+                        {known && r.depth > 0 && usedAgents.has(r.name) && <span className="block text-[11px] text-ink-3">ran in {usedAgents.get(r.name)} of {runs} runs</span>}
+                      </span>
+                      {isChanged && (
+                        <button onClick={() => set([r], r.model)} title={`Back to ${r.model}`} className="ml-auto text-[11px] text-ink-3 hover:text-ink">undo</button>
+                      )}
+                    </div>
+                  </td>
+                  {columns.map((m) => {
+                    const on = now === m;
+                    const wasToday = r.model === m;
+                    return (
+                      <td key={m} className="border-b border-l border-line/70 p-0 text-center">
+                        <button onClick={() => set([r], m)} aria-label={`${r.name} uses ${m}`} aria-pressed={on}
+                          title={on ? `${r.name} uses ${m}` : `Use ${m} for ${r.name}`}
+                          className="group flex h-9 w-full items-center justify-center hover:bg-hover">
+                          <span className={`grid size-[18px] place-items-center rounded-full border-2 transition-colors ${
+                            on ? (isChanged ? "border-accent bg-accent" : "border-ink-2 bg-ink-2") : wasToday ? "border-dashed border-ink-3/60" : "border-line-strong group-hover:border-ink-3"}`}>
+                            {on && <span className="size-1.5 rounded-full bg-bg" />}
+                          </span>
+                        </button>
+                      </td>
+                    );
+                  })}
+                  <td className="sticky right-0 border-b border-l border-line/70 bg-bg" />
+                </tr>
+              );
+            })}
+            {!rows.length && (
+              <tr><td colSpan={columns.length + 2} className="px-3 py-3 text-ink-3">No agents match “{q}”.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-[11.5px] text-ink-3">
+        <span className="mr-3 inline-flex items-center gap-1"><span className="size-2.5 rounded-full bg-ink-2" /> today's model</span>
+        <span className="mr-3 inline-flex items-center gap-1"><span className="size-2.5 rounded-full bg-accent" /> changed</span>
+        <span className="inline-flex items-center gap-1"><span className="size-2.5 rounded-full border border-dashed border-ink-3" /> was today's</span>
+      </p>
+
+      {adding && addAt && (
+        <div className="fixed z-[60] w-[360px] rounded-lg border border-line bg-bg p-2.5 shadow-[0_12px_32px_-8px_rgb(0_0_0/0.35)]"
+          style={{ top: addAt.top, right: addAt.right }}>
+          <div className="mb-1.5 text-[12px] text-ink-3">Add a model as a new column</div>
+          <div className="flex items-center gap-1.5">
+            <ModelPicker autoFocus value={newModel} onChange={setNewModel} options={modelOptions} placeholder="Search or type a model id" className="flex-1" />
+            <button onClick={() => { addColumn(); closeAdd(); }} disabled={!newModel.trim()}
+              className="h-8 shrink-0 rounded-md bg-ink px-3 text-[12.5px] font-medium text-bg disabled:opacity-40">Add</button>
+            <button onClick={closeAdd} aria-label="Cancel" className="grid size-8 shrink-0 place-items-center rounded-md text-ink-3 hover:bg-hover hover:text-ink"><Icon.close size={13} /></button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

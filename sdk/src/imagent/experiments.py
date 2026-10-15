@@ -191,6 +191,10 @@ def agent(name: str, *, replay_overrides: dict[str, dict[str, Any]] | None = Non
                 _latest[name] = bid
                 while len(_builds) > MAX_BUILDS:
                     _builds.popitem(last=False)
+            from . import blueprint, replay
+
+            if replay.current() is None and not blueprint._nested():  # noqa: SLF001
+                blueprint.seen_agent(graph, name)  # every build keeps the blueprint current (throttled, on change)
             return graph
 
         async def replay(job: Any) -> str:

@@ -6,6 +6,7 @@ import { FlowView } from "./FlowView";
 import { NowPlaying, PlayerBar, usePlayer, type PlaySpan } from "./Replay";
 import { SpanPanel } from "./SpanPanel";
 import { SpanTree, type TreeSpan } from "./SpanTree";
+import { TryModel } from "./TraceView";
 import { StepsTree } from "./StepsTree";
 import { Split } from "./Split";
 import { useTrace } from "./TraceView";
@@ -73,6 +74,7 @@ export function ThreadTreePanel({ threadId, project, tick, onOpenTrace, height =
               <button onClick={() => { setMain("flow"); player.start(); }} title="Play the thread back as it happened"
                 className="inline-flex h-7 items-center gap-1.5 rounded-md bg-ink px-2.5 text-[12px] font-medium text-bg"><Icon.play size={11} /> Replay</button>
             )}
+            {!player.on && sel && <ThreadTryModel spans={spans} sel={sel} />}
             {q.data.truncated && <span className="text-[12px] text-ink-3">Showing the first 5,000 spans.</span>}
             <span className="ml-auto hidden text-[11.5px] text-ink-3 lg:inline"><kbd>[</kbd> <kbd>]</kbd> step through</span>
           </div>
@@ -116,4 +118,14 @@ function SelectedSpan({ traceId, spanId }: { traceId: string; spanId: string }) 
   if (q.isPending) return <Panel className="h-full"><Spinner /></Panel>;
   const span = q.data.spans.find((s) => s.span_id === spanId);
   return span ? <SpanPanel span={span} /> : <Panel className="h-full"><Empty title="Span not found" /></Panel>;
+}
+
+
+/** "Try another model" for the run the selected step belongs to (threads hold several runs). */
+function ThreadTryModel({ spans, sel }: { spans: TreeSpan[]; sel: TreeSpan }) {
+  const run = spans.filter((s) => s.trace_id === sel.trace_id);
+  const ids = new Set(run.map((s) => s.span_id));
+  const root = run.find((s) => !ids.has(s.parent_span_id));
+  if (!root || !run.some((s) => s.kind === "llm")) return null;
+  return <TryModel traceId={sel.trace_id} root={root} span={sel} spans={run} />;
 }

@@ -59,6 +59,11 @@ def test_publish_is_noop_without_init():
         assert imagent.publish_blueprint(_graph(), background=False) is None
 
 
+def _reset(b):
+    for d in (b._sub_names, b._merged, b._sent, b._last_check):
+        d.clear()
+
+
 def test_first_run_publishes_automatically_once_and_skips_nested_graphs():
     from imagent import blueprint as b
 
@@ -69,7 +74,7 @@ def test_first_run_publishes_automatically_once_and_skips_nested_graphs():
     outer_g.add_edge("delegate", END)
     outer = outer_g.compile(name="boss")
 
-    b._known.clear()
+    _reset(b)
     b.install_auto()
     sent = []
     with patch.object(b, "_send", side_effect=sent.append):
@@ -108,3 +113,31 @@ def test_init_if_configured_only_connects_when_pointed_at_a_server(monkeypatch, 
     monkeypatch.setenv("IMAGENT_ENABLED", "false")
     assert runtime.init_if_configured() is None
     monkeypatch.setattr(runtime, "_dotenv", None)
+
+
+
+def test_blueprint_follows_the_app_when_its_agents_change():
+    """A sub-agent or tool added later in the same process shows up; unchanged builds aren't re-sent;
+    agents a request didn't build are kept (other requests build them)."""
+    from imagent import blueprint as b
+
+    def app(subs, tools, model="m1"):
+        return {"name": "boss", "description": "", "model": {"name": model}, "system_prompt": "p", "middleware": [],
+                "tools": [{"name": t} for t in tools], "graph": {"nodes": [], "edges": []},
+                "subagents": [{"name": n, "model": {"name": "m"}, "tools": [], "middleware": [], "subagents": [],
+                               "graph": {"nodes": [], "edges": []}} for n in subs]}
+
+    _reset(b)
+    builds = iter([app(["noon"], ["t1"]), app(["noon"], ["t1"]), app(["noon", "claims"], ["t1", "t2"]),
+                   app(["noon"], ["t1"], model="m2")])
+    sent = []
+    with patch.object(b, "describe", side_effect=lambda g, n: {"schema": 1, "framework": "x", "versions": {}, "root": next(builds)}), \
+         patch.object(b, "_send", side_effect=sent.append), patch.object(b, "REFRESH_SECONDS", 0):
+        for _ in range(4):
+            b._refresh(object(), "boss")
+    roots = [s["root"] for s in sent]
+    assert len(sent) == 3                                              # 2nd build was identical → not re-sent
+    assert {s["name"] for s in roots[1]["subagents"]} == {"noon", "claims"} and len(roots[1]["tools"]) == 2
+    assert roots[2]["model"]["name"] == "m2"                           # model change → sent
+    assert {s["name"] for s in roots[2]["subagents"]} == {"noon", "claims"}   # claims kept: another request builds it
+    assert "claims" in b._sub_names                                    # its own runs don't become a separate app

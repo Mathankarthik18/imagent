@@ -3,7 +3,7 @@ import { useCallback, useRef, useState } from "react";
 import { api, type Span } from "../lib/api";
 import { fmtCost, fmtDuration, fmtNum, parseTime } from "../lib/format";
 import { useHotkey } from "../lib/keys";
-import { FlowView } from "./FlowView";
+import { FlowView, isScope } from "./FlowView";
 import { NowPlaying, PlayerBar, usePlayer } from "./Replay";
 import { SpanTree } from "./SpanTree";
 import { StepsTree } from "./StepsTree";
@@ -12,6 +12,8 @@ import { SpanPanel } from "./SpanPanel";
 import { Split } from "./Split";
 import { ErrorBox, Panel, Spinner } from "./ui";
 import { Icon } from "./icons";
+import { Link } from "react-router-dom";
+import { pp } from "../lib/project";
 
 export function useTrace(traceId: string) {
   return useQuery({
@@ -79,6 +81,7 @@ export function TraceView({ traceId, selected, onSelect, splitId = "trace", heig
           <button onClick={() => { setMain("flow"); player.start(); }} title="Play the run back as it happened"
             className="inline-flex h-7 items-center gap-1.5 rounded-md bg-ink px-2.5 text-[12px] font-medium text-bg"><Icon.play size={11} /> Replay</button>
         )}
+        {!player.on && stats.llm > 0 && <TryModel traceId={traceId} root={stats.root} span={span} spans={spans} />}
         <span><span className="text-ink">{fmtDuration(stats.duration)}</span> {stats.running ? "so far" : "total"}</span>
         <span><span className="text-ink">{spans.length}</span> spans</span>
         <span><span className="text-ink">{stats.llm}</span> LLM · <span className="text-ink">{stats.tools}</span> tool calls</span>
@@ -113,4 +116,38 @@ export function TraceView({ traceId, selected, onSelect, splitId = "trace", heig
       {player.on && <PlayerBar player={player} />}
     </div>
   );
+}
+
+
+/** Start an experiment from this run: replay it with another model — for the selected sub-agent
+ *  when one is selected. Not offered on experiment replays themselves. */
+/** Fields TryModel needs — trace spans and the thread view's lighter spans both fit. */
+type RunSpan = { span_id: string; parent_span_id: string; name: string; kind: string; thread_id?: string };
+
+export function TryModel({ traceId, root, span, spans }: { traceId: string; root?: RunSpan | null; span?: RunSpan; spans: RunSpan[] }) {
+  if (!root || root.name.startsWith("replay:") || root.thread_id?.startsWith("experiment:")) return null;
+  const sub = span ? subAgentOf(span, root, spans) : "";
+  const to = `/experiments/new?root=${encodeURIComponent(root.name)}&sources=${traceId}${sub ? `&focus=${encodeURIComponent(sub)}` : ""}`;
+  return (
+    <Link to={pp(to)} title={sub ? `Replay this run with a different model for ${sub}` : "Replay this run with a different model and compare the answers"}
+      className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-line px-2.5 text-[12px] font-medium text-ink-2 hover:border-line-strong hover:text-ink">
+      <Icon.experiments size={12} /> {sub ? <>Try another model for <span className="max-w-[160px] truncate font-mono">{sub}</span></> : "Try another model"}
+    </Link>
+  );
+}
+
+
+/** The sub-agent a span belongs to: the span itself or its nearest enclosing sub-agent (an agent
+ *  span, or a deepagents sub-agent — a chain run by a tool); a `task` call → the sub-agent it started. */
+function subAgentOf(span: RunSpan, root: RunSpan, spans: RunSpan[]): string {
+  const byId = new Map(spans.map((s) => [s.span_id, s as never]));
+  const kids = (id: string) => spans.filter((s) => s.parent_span_id === id);
+  if (span.kind === "tool") {
+    const started = kids(span.span_id).find((c) => isScope(c as never, byId));
+    if (started) return started.name;
+  }
+  for (let s: RunSpan | undefined = span; s && s.span_id !== root.span_id; s = byId.get(s.parent_span_id) as RunSpan | undefined) {
+    if (isScope(s as never, byId)) return s.name;
+  }
+  return "";
 }

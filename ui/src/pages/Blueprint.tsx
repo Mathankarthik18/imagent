@@ -29,13 +29,16 @@ type Days = "1" | "7" | "30";
 export function Blueprint() {
   const [params, setParams] = useSearchParams();
   const { project } = useAppState();
-  const list = useQuery({ queryKey: ["blueprints", project], queryFn: () => api<BlueprintSummary[]>("/api/blueprints", { project }) });
+  // The app re-sends its blueprint when its agents change — keep the page current without a reload.
+  const list = useQuery({ queryKey: ["blueprints", project], queryFn: () => api<BlueprintSummary[]>("/api/blueprints", { project }),
+    refetchInterval: 30_000 });
   const pick = params.get("app");
   const summary = (list.data ?? []).find((b) => `${b.project}/${b.name}` === pick) ?? list.data?.[0];
   const [days, setDays] = useState<Days>("7");
   const bp = useQuery({
     enabled: !!summary, queryKey: ["blueprint", summary?.project, summary?.name, days],
     queryFn: () => api<BP>(`/api/blueprints/${summary!.project}/${summary!.name}`, { days }),
+    refetchInterval: 30_000,
   });
 
   if (list.isError) return <ErrorBox error={list.error} />;
