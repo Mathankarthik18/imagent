@@ -1,12 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Background, Controls, Handle, Position, ReactFlow, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { HANDLE, Tile } from "../components/FlowView";
 import { Icon } from "../components/icons";
+import { ModelPicker, useModelOptions } from "../components/ModelPicker";
 import { Empty, ErrorBox, PageHeader, Segmented, Spinner, controlCls } from "../components/ui";
-import { api, type Blueprint as BP, type BlueprintSummary, type BpAgent, type BpAgentStats, type BpTool } from "../lib/api";
+import { api, apiPost, type Runner, type Blueprint as BP, type BlueprintSummary, type BpAgent, type BpAgentStats, type BpTool } from "../lib/api";
 import { fmtCost, fmtDuration, fmtNum, timeAgo } from "../lib/format";
 import { pp } from "../lib/project";
 import { useAppState } from "../lib/state";
@@ -85,29 +86,147 @@ function BlueprintView({ data }: { data: BP }) {
   const selected = index.get(params.get("agent") ?? "")?.agent ?? root;
   const select = (name: string) => setParams((p) => { p.set("agent", name); return p; }, { replace: true });
   const stat = (n: string) => data.stats[n] ?? EMPTY;
+  // "What if this agent used another model?" — picked right on the canvas, run from the bar below it.
+  const [changes, setChanges] = useState<Record<string, string>>({});
+  const [picking, setPicking] = useState<{ agent: string; x: number; y: number } | null>(null);
+  const pick = useCallback((agent: string, rect: DOMRect) => setPicking({ agent, x: rect.left, y: rect.bottom + 6 }), []);
+  const current = (n: string) => stat(n).models[0]?.model || index.get(n)?.agent.model?.name || "";
 
   return (
     <div className="flex min-h-0 flex-1 gap-3 max-lg:flex-col">
       <div className="relative min-h-[420px] min-w-0 flex-1 overflow-hidden rounded-lg border border-line bg-panel">
-        <Canvas root={root} stats={data.stats} days={data.days} selected={selected.name} onSelect={select} />
+        <Canvas root={root} stats={data.stats} days={data.days} selected={selected.name} onSelect={select} changes={changes} onPickModel={pick} />
+        {Object.keys(changes).length === 0 && (
+          <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-line bg-bg/90 px-3 py-1 text-[12px] text-ink-3 shadow-sm backdrop-blur">
+            Click an agent's model to try another one
+          </div>
+        )}
+        <TryBar project={data.project} rootName={root.name} changes={changes} current={current}
+          onRemove={(a) => setChanges((c) => { const n = { ...c }; delete n[a]; return n; })} onClear={() => setChanges({})} />
+        {picking && (
+          <ModelPopover x={picking.x} y={picking.y} agent={picking.agent} current={current(picking.agent)} project={data.project}
+            value={changes[picking.agent] ?? ""} onClose={() => setPicking(null)}
+            onChoose={(m) => { setChanges((c) => { const n = { ...c }; if (m) n[picking.agent] = m; else delete n[picking.agent]; return n; }); setPicking(null); }} />
+        )}
       </div>
       <aside className="flex w-[440px] shrink-0 flex-col overflow-hidden rounded-lg border border-line bg-bg max-lg:w-full">
         <AgentPanel key={selected.name} agent={selected} isRoot={selected === root} stats={stat(selected.name)} days={data.days}
-          subStats={(n) => stat(n)} onSelect={select} parent={index.get(selected.name)?.parent} rootName={root.name} />
+          subStats={(n) => stat(n)} onSelect={select} parent={index.get(selected.name)?.parent} onTry={pick} />
       </aside>
+    </div>
+  );
+}
+
+// ── try another model ─────────────────────────────────────────────────────────
+
+/** Pick a different model for one agent, anchored under the chip that was clicked. */
+function ModelPopover({ x, y, agent, current, project, value, onClose, onChoose }: {
+  x: number; y: number; agent: string; current: string; project: string; value: string;
+  onClose: () => void; onChoose: (model: string) => void;
+}) {
+  const [model, setModel] = useState(value);
+  const options = useModelOptions(project, current ? [current] : []);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const down = (e: MouseEvent) => { if (!box.current?.contains(e.target as globalThis.Node)) onClose(); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", down);
+    document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [onClose]);
+  const left = Math.max(12, Math.min(x, window.innerWidth - 460));
+  const top = Math.min(y, window.innerHeight - 380);
+  const ok = model.trim() && model.trim() !== current;
+  return (
+    <div ref={box} onKeyDown={(e) => {
+      // Enter with the list closed applies; with it open, the picker takes the highlighted model first.
+      if (e.key === "Enter" && ok && (e.target as HTMLElement).getAttribute("aria-expanded") === "false") onChoose(model.trim());
+    }} className="fixed z-50 w-[440px] rounded-lg border border-line bg-bg p-3 shadow-[0_12px_32px_-8px_rgb(0_0_0/0.3)]" style={{ left, top }}>
+      <div className="text-[13px] font-medium text-ink">Try another model for <span className="font-mono">{agent}</span></div>
+      <div className="mb-2.5 mt-0.5 text-[12px] text-ink-3">Runs today on <span className="font-mono">{current || "unknown"}</span></div>
+      <ModelPicker value={model} onChange={setModel} options={options} autoFocus />
+      <div className="mt-3 flex items-center gap-2">
+        {value && <button onClick={() => onChoose("")} className="text-[12.5px] text-ink-3 hover:text-ink">Keep current</button>}
+        <button onClick={onClose} className="ml-auto h-7 rounded-md px-2.5 text-[12.5px] text-ink-2 hover:bg-hover">Cancel</button>
+        <button disabled={!ok} onClick={() => onChoose(model.trim())}
+          className="h-7 rounded-md bg-ink px-3 text-[12.5px] font-medium text-bg disabled:opacity-40">Use this model</button>
+      </div>
+    </div>
+  );
+}
+
+const RUN_COUNTS = [5, 10, 25, 50];
+
+/** "1 change: agent → model · Test on [last 10] runs · Run" — replays the latest runs that used the changed agents. */
+function TryBar({ project, rootName, changes, current, onRemove, onClear }: {
+  project: string; rootName: string; changes: Record<string, string>; current: (agent: string) => string;
+  onRemove: (agent: string) => void; onClear: () => void;
+}) {
+  const navigate = useNavigate();
+  const [limit, setLimit] = useState(10);
+  const agents = Object.keys(changes).sort();
+  const runs = useQuery({
+    queryKey: ["candidates", project, rootName, agents.join(","), limit], enabled: agents.length > 0,
+    queryFn: () => api<{ trace_ids: string[]; total: number; days: number }>("/api/experiments/candidates",
+      { project, root_name: rootName, agents: agents.join(","), limit }),
+  });
+  // Experiments run under the app's registered agent name; fall back to the blueprint root.
+  const runners = useQuery({ queryKey: ["runners", project], queryFn: () => api<Runner[]>("/api/runners", { project }), enabled: agents.length > 0 });
+  const agentName = runners.data?.flatMap((r) => r.agents).find((a) => a.source_root === rootName)?.name ?? rootName;
+  const ids = runs.data?.trace_ids ?? [];
+  const start = useMutation({
+    mutationFn: () => apiPost<{ id: string }>("/api/experiments", {
+      agent: agentName, project, source_trace_ids: ids, repeats: 1, tool_mode: "recorded",
+      variants: [{ name: agents.map((a) => `${a} → ${short(changes[a])}`).join(", "), model: "", models: changes }],
+    }),
+    onSuccess: (r) => navigate(pp(`/experiments/${r.id}`)),
+  });
+  if (!agents.length) return null;
+  return (
+    <div className="absolute inset-x-3 bottom-3 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-bg/95 px-3 py-2 text-[12.5px] shadow-[0_8px_24px_-8px_rgb(0_0_0/0.25)] backdrop-blur">
+      <span className="whitespace-nowrap font-medium text-ink">{agents.length} {agents.length === 1 ? "change" : "changes"}</span>
+      {agents.map((a) => (
+        <span key={a} className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md bg-accent-soft px-1.5 py-0.5 font-mono text-[11.5px] text-ink">
+          <span className="truncate">{a}</span><span className="text-ink-3">:</span>
+          <span className="truncate text-ink-3 line-through">{short(current(a)) || "?"}</span><span>→</span>
+          <span className="truncate font-medium">{short(changes[a])}</span>
+          <button onClick={() => onRemove(a)} title="Remove" className="ml-0.5 text-ink-3 hover:text-ink"><Icon.close size={11} /></button>
+        </span>
+      ))}
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5 whitespace-nowrap">
+        <span className="inline-flex items-center gap-1.5 text-ink-3">Test on
+          <select className={controlCls} value={limit} onChange={(e) => setLimit(Number(e.target.value))} aria-label="How many runs">
+            {RUN_COUNTS.map((n) => <option key={n} value={n}>last {n}</option>)}
+          </select>
+          runs</span>
+        <span className="num text-[12px] text-ink-3">
+          {runs.isPending ? "…" : runs.isError ? "couldn't load runs" : ids.length === 0 ? `no runs used ${agents.length === 1 ? "this agent" : "these agents"} in ${runs.data!.days}d`
+            : ids.length < limit ? `only ${ids.length} found` : `of ${fmtNum(runs.data!.total)} in ${runs.data!.days}d`}
+        </span>
+        <button onClick={onClear} className="h-7 rounded-md px-2 text-ink-3 hover:bg-hover hover:text-ink">Clear</button>
+        <button onClick={() => navigate(pp(`/experiments/new?root=${encodeURIComponent(rootName)}&sources=${ids.join(",")}`))}
+          className="h-7 rounded-md px-2 text-ink-3 hover:bg-hover hover:text-ink" title="Pick runs, repeats and tool access yourself">Advanced…</button>
+        <button disabled={!ids.length || start.isPending} onClick={() => start.mutate()}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md bg-ink px-3 font-medium text-bg disabled:opacity-40">
+          <Icon.play size={11} /> {start.isPending ? "Starting…" : `Run on ${ids.length || ""} ${ids.length === 1 ? "run" : "runs"}`}
+        </button>
+      </div>
+      {start.isError && <div className="w-full text-[12px] text-critical">{(start.error as Error).message}</div>}
     </div>
   );
 }
 
 // ── canvas ────────────────────────────────────────────────────────────────────
 
-type CardData = { agent: BpAgent; stats: BpAgentStats; isRoot: boolean; selected: boolean; days: number; onSelect: () => void };
+type CardData = { agent: BpAgent; stats: BpAgentStats; isRoot: boolean; selected: boolean; days: number; onSelect: () => void;
+  change?: string; onPickModel: (rect: DOMRect) => void };
 type FrameData = { label: string; used: number; total: number; width: number; height: number };
 
 interface Box { w: number; h: number }
 
-function Canvas({ root, stats, days, selected, onSelect }: {
+function Canvas({ root, stats, days, selected, onSelect, changes, onPickModel }: {
   root: BpAgent; stats: Record<string, BpAgentStats>; days: number; selected: string; onSelect: (n: string) => void;
+  changes: Record<string, string>; onPickModel: (agent: string, rect: DOMRect) => void;
 }) {
   const { theme } = useAppState();
   const { nodes, edges } = useMemo(() => {
@@ -132,7 +251,8 @@ function Canvas({ root, stats, days, selected, onSelect }: {
       const cardId = `a:${a.name}`;
       nodes.push({
         id: cardId, type: "agent", position: { x: x + (box.w - CARD_W) / 2, y }, parentId, extent: parentId ? "parent" : undefined,
-        data: { agent: a, stats: st(a.name), isRoot, selected: a.name === selected, days, onSelect: () => onSelect(a.name) } satisfies CardData,
+        data: { agent: a, stats: st(a.name), isRoot, selected: a.name === selected, days, onSelect: () => onSelect(a.name),
+                change: changes[a.name], onPickModel: (rect: DOMRect) => onPickModel(a.name, rect) } satisfies CardData,
         draggable: true,
       });
       if (!a.subagents.length) return;
@@ -161,7 +281,7 @@ function Canvas({ root, stats, days, selected, onSelect }: {
     };
     place(root, 0, 0, undefined, true);
     return { nodes, edges };
-  }, [root, stats, days, selected, onSelect]);
+  }, [root, stats, days, selected, onSelect, changes, onPickModel]);
 
   return (
     <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} colorMode={theme} fitView fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
@@ -181,7 +301,7 @@ function AgentCard({ data }: NodeProps<Node<CardData>>) {
   const errs = s.errors + s.models.reduce((x, m) => x + m.errors, 0) + Object.values(s.tools).reduce((x, t) => x + t.errors, 0);
   return (
     <div onClick={data.onSelect}
-      className={`flex cursor-pointer flex-col justify-between rounded-xl border bg-bg px-3 py-2.5 shadow-[0_1px_2px_rgb(0_0_0/0.06)] transition-[border-color,box-shadow,opacity] ${selected ? "border-accent shadow-[0_0_0_3px_var(--accent-soft)]" : isRoot ? "border-[#cc4a1a]/50" : "border-line-strong hover:border-ink-3"} ${idle && !selected ? "opacity-55" : ""}`}
+      className={`flex cursor-pointer flex-col justify-between rounded-xl border bg-bg px-3 py-2.5 shadow-[0_1px_2px_rgb(0_0_0/0.06)] transition-[border-color,box-shadow,opacity] ${data.change ? "border-accent" : ""} ${selected ? "border-accent shadow-[0_0_0_3px_var(--accent-soft)]" : isRoot ? "border-[#cc4a1a]/50" : "border-line-strong hover:border-ink-3"} ${idle && !selected ? "opacity-55" : ""}`}
       style={{ width: CARD_W, height: CARD_H }}>
       {!isRoot && <Handle type="target" position={Position.Top} className={HANDLE} />}
       <Handle type="source" position={Position.Bottom} className={HANDLE} />
@@ -189,7 +309,12 @@ function AgentCard({ data }: NodeProps<Node<CardData>>) {
         <Tile role={isRoot ? "main" : "sub"} size={30} />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-medium text-ink" title={a.name}>{a.name}</div>
-          <div className="truncate font-mono text-[11px] text-ink-3" title={a.model?.name}>{a.model ? short(a.model.name) : "model unknown"}</div>
+          <button type="button" title="Try another model for this agent"
+            onClick={(e) => { e.stopPropagation(); data.onPickModel((e.currentTarget as HTMLElement).getBoundingClientRect()); }}
+            className={`nodrag mt-0.5 inline-flex max-w-full items-center gap-1 rounded px-1 font-mono text-[11px] ${data.change ? "bg-accent-soft text-ink" : "text-ink-3 hover:bg-subtle hover:text-ink"}`}>
+            <span className={`truncate ${data.change ? "line-through opacity-60" : ""}`}>{s.models[0]?.model ? short(s.models[0].model) : a.model ? short(a.model.name) : "model unknown"}</span>
+            {data.change ? <><span>→</span><span className="truncate font-medium">{short(data.change)}</span></> : <Icon.chevronDown size={10} className="shrink-0" />}
+          </button>
         </div>
         {errs > 0 && <span className="num shrink-0 rounded bg-critical/10 px-1 text-[10.5px] font-medium text-critical" title="errors in window">{errs} err</span>}
       </div>
@@ -232,12 +357,11 @@ const nodeTypes = { agent: AgentCard, frame: FrameNode };
 
 type Tab = "overview" | "tools" | "prompt" | "framework";
 
-function AgentPanel({ agent: a, isRoot, stats: s, days, subStats, onSelect, parent, rootName }: {
+function AgentPanel({ agent: a, isRoot, stats: s, days, subStats, onSelect, parent, onTry }: {
   agent: BpAgent; isRoot: boolean; stats: BpAgentStats; days: number; subStats: (n: string) => BpAgentStats;
-  onSelect: (n: string) => void; parent?: string; rootName: string;
+  onSelect: (n: string) => void; parent?: string; onTry: (agent: string, rect: DOMRect) => void;
 }) {
   const [tab, setTab] = useState<Tab>("overview");
-  const navigate = useNavigate();
   const own = a.tools.filter((t) => !t.builtin);
   return (
     <>
@@ -255,7 +379,7 @@ function AgentPanel({ agent: a, isRoot, stats: s, days, subStats, onSelect, pare
           </div>
         </div>
         {a.description && <p className="mt-2 line-clamp-4 text-[12.5px] text-ink-2" title={a.description}>{a.description}</p>}
-        <button onClick={() => navigate(pp(`/experiments/new?root=${encodeURIComponent(rootName)}${isRoot ? "" : `&focus=${encodeURIComponent(a.name)}`}`))}
+        <button onClick={(e) => onTry(a.name, e.currentTarget.getBoundingClientRect())}
           className="mt-3 inline-flex h-7 items-center gap-1.5 rounded-md border border-line px-2.5 text-[12.5px] font-medium text-ink-2 hover:border-line-strong hover:text-ink">
           <Icon.experiments size={13} /> Try another model{isRoot ? "" : " for this agent"}
         </button>

@@ -342,6 +342,12 @@ async def api_source_agents(trace_ids: str = "") -> list[dict]:
     return await experiments.agents_in_runs([t.strip().lower() for t in trace_ids.split(",") if t.strip()][:200])
 
 
+@app.get("/api/experiments/candidates", dependencies=read)
+async def api_candidates(project: str, root_name: str, agents: str = "", limit: int = Query(10, ge=1, le=100)) -> dict:
+    """Latest runs that used these agents (comma-separated) — what a Blueprint experiment replays."""
+    return await experiments.candidate_runs(project, root_name, [a.strip() for a in agents.split(",") if a.strip()], limit)
+
+
 @app.get("/api/models", dependencies=read)
 async def api_models(project: str | None = None) -> dict:
     """Models to pick from: this project's (most used first) and the price catalog."""

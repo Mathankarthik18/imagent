@@ -419,3 +419,18 @@ async def models(project: str | None) -> dict[str, Any]:
     catalog = await query(f"SELECT source_id AS id, input, output FROM {PRICES} FINAL WHERE source_id != '' ORDER BY source_id")
     return {"used": [{"model": u["model"], "calls": u["calls"]} for u in used],
             "catalog": [{"id": c["id"], "input": c["input"], "output": c["output"]} for c in catalog]}
+
+
+async def candidate_runs(project: str, root_name: str, agents: list[str], limit: int = 10, days: int = 30) -> dict[str, Any]:
+    """The latest production runs of ``root_name`` in which any of ``agents`` made a model call —
+    the runs a model change for those agents can actually affect."""
+    params: dict[str, Any] = {"p": project, "root": root_name, "agents": agents, "d": days, "limit": limit}
+    used = "" if root_name in agents or not agents else (
+        f" AND trace_id IN (SELECT DISTINCT trace_id FROM {SPANS} WHERE project = {{p:String}} AND kind = 'llm'"
+        f" AND start_time >= now() - toIntervalDay({{d:UInt32}}) AND {_WHO} IN {{agents:Array(String)}})")
+    where = (f"project = {{p:String}} AND is_root = 1 AND name = {{root:String}} AND origin = ''"
+             f" AND start_time >= now() - toIntervalDay({{d:UInt32}}){used}")
+    rows = await query(f"SELECT trace_id, max(start_time) AS t FROM {SPANS} WHERE {where} GROUP BY trace_id ORDER BY t DESC "
+                       f"LIMIT {{limit:UInt32}}", params)
+    total = (await query(f"SELECT uniqExact(trace_id) AS n FROM {SPANS} WHERE {where}", params))[0]["n"]
+    return {"trace_ids": [r["trace_id"] for r in rows], "total": total, "days": days}

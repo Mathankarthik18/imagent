@@ -708,5 +708,9 @@ def test_new_experiment_helpers_agents_in_runs_and_models(client):
     agents = client.get("/api/experiments/source-agents", params={"trace_ids": tid}).json()
     assert {a["agent"]: a["llm_calls"] for a in agents} == {"noon": 2, "boss": 1}
     assert client.get("/api/experiments/source-agents", params={"trace_ids": ""}).json() == []
+    c = client.get("/api/experiments/candidates", params={"project": "helpers-test", "root_name": "boss", "agents": "noon"}).json()
+    assert c["trace_ids"] == [tid] and c["total"] == 1
+    assert client.get("/api/experiments/candidates", params={"project": "helpers-test", "root_name": "boss", "agents": "nobody"}).json()["total"] == 0
+    assert client.get("/api/experiments/candidates", params={"project": "helpers-test", "root_name": "boss", "agents": "boss"}).json()["total"] == 1
     m = client.get("/api/models", params={"project": "helpers-test"}).json()
     assert [u["model"] for u in m["used"]] == ["m-small", "m-big"] and isinstance(m["catalog"], list)

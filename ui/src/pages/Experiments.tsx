@@ -14,7 +14,8 @@ export function Experiments() {
   const { project } = useAppState();
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const newExperiment = () => navigate(pp("/experiments/new"));
+  // New experiments start on the blueprint: click an agent's model, pick another, run.
+  const newExperiment = () => navigate(pp("/blueprint"));
   // Old links (?new=1&sources=…) open the New experiment page.
   useEffect(() => {
     if (params.get("new") === "1") {
@@ -32,14 +33,17 @@ export function Experiments() {
   return (
     <>
       <PageHeader title="Experiments" meta="Replay real runs with other models and see which does better">
-        <button onClick={newExperiment} className="h-7 rounded-md bg-ink px-3 text-[12.5px] font-medium text-bg">New experiment</button>
+        <button onClick={() => navigate(pp("/experiments/new"))} className="h-7 rounded-md px-2.5 text-[12.5px] text-ink-3 hover:bg-hover hover:text-ink"
+          title="Pick runs, variants, repeats and tool access yourself">Advanced</button>
+        <button onClick={newExperiment} className="h-7 rounded-md bg-ink px-3 text-[12.5px] font-medium text-bg"
+          title="Opens the blueprint — click an agent's model to try another">New experiment</button>
       </PageHeader>
 
       {!conn.loading && <div className="mb-5"><ConnectionBanner state={conn.state} hosts={conn.runners.map((r) => r.host)} /></div>}
 
       {exps.isError ? <ErrorBox error={exps.error} /> : exps.isPending ? <Spinner /> : (exps.data ?? []).length === 0 ? (
         <Empty title="No experiments yet"
-          hint={<>Pick recorded runs, choose a model — for the whole run or for single agents on the blueprint — and imagent replays them
+          hint={<>On the blueprint, click any agent's model and pick another. imagent replays your latest runs of that agent
             inside your app with the original tool outputs, then scores each against the original.</>}
           action={<button onClick={newExperiment} className="text-accent hover:underline">Start one</button>} />
       ) : (

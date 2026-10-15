@@ -1,4 +1,6 @@
+import { useQuery } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
+import { api } from "../lib/api";
 import { controlCls } from "./ui";
 
 /** A model to offer: from this project's traces ("used") or the price catalog. */
@@ -59,4 +61,21 @@ export function ModelPicker({ value, onChange, options, placeholder = "Search or
       )}
     </div>
   );
+}
+
+/** Models to offer in a project: the ones its traces use (most used first), then the price catalog. */
+export function useModelOptions(project: string, extra: string[] = []): ModelOption[] {
+  const q = useQuery({ queryKey: ["models", project], staleTime: 300_000,
+    queryFn: () => api<{ used: { model: string; calls: number }[]; catalog: { id: string; input: number; output: number }[] }>("/api/models", { project }) });
+  const extraKey = extra.join("|");
+  return useMemo(() => {
+    const seen = new Set<string>();
+    const out: ModelOption[] = [];
+    for (const u of q.data?.used ?? []) { seen.add(u.model); out.push({ id: u.model, group: "used", note: `${u.calls.toLocaleString()} calls` }); }
+    for (const m of extra) if (m && !seen.has(m)) { seen.add(m); out.push({ id: m, group: "used" }); }
+    const price = (n: number) => (n < 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(n < 10 ? 1 : 0)}`);
+    for (const c of q.data?.catalog ?? []) out.push({ id: c.id, group: "catalog", note: `${price(c.input)} / ${price(c.output)} per 1M` });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data, extraKey]);
 }
