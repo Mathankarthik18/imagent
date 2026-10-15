@@ -389,3 +389,33 @@ async def rejudge(exp_id: str) -> int:
         await _write_job({**j, "judgement": ""})
         n += 1
     return n
+
+
+# ── New experiment helpers ─────────────────────────────────────────────────────
+_WHO = "if(agent_name != '', agent_name, JSONExtractString(metadata, 'lc_agent_name'))"
+
+
+async def agents_in_runs(trace_ids: list[str]) -> list[dict[str, Any]]:
+    """Agents that made model calls in these runs — the only ones a model change can affect."""
+    if not trace_ids:
+        return []
+    rows = await query(f"""
+        SELECT {_WHO} AS agent, uniqExact(trace_id) AS runs, count() AS llm_calls
+        FROM {SPANS} WHERE trace_id IN {{ids:Array(String)}} AND kind = 'llm'
+        GROUP BY agent HAVING agent != '' ORDER BY runs DESC, llm_calls DESC""", {"ids": trace_ids})
+    return [{"agent": r["agent"], "runs": r["runs"], "llm_calls": r["llm_calls"]} for r in rows]
+
+
+async def models(project: str | None) -> dict[str, Any]:
+    """Models to choose from: the ones this project's traces use (most used first) and the price catalog."""
+    from .price_sync import PRICES
+
+    used: list[dict[str, Any]] = []
+    if project:
+        used = await query(f"""
+            SELECT model, count() AS calls FROM {SPANS}
+            WHERE project = {{p:String}} AND kind = 'llm' AND model != '' AND start_time >= now() - INTERVAL 30 DAY
+            GROUP BY model ORDER BY calls DESC LIMIT 50""", {"p": project})
+    catalog = await query(f"SELECT source_id AS id, input, output FROM {PRICES} FINAL WHERE source_id != '' ORDER BY source_id")
+    return {"used": [{"model": u["model"], "calls": u["calls"]} for u in used],
+            "catalog": [{"id": c["id"], "input": c["input"], "output": c["output"]} for c in catalog]}

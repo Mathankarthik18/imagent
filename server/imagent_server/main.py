@@ -336,6 +336,18 @@ async def api_create_experiment(body: ExperimentIn) -> dict:
                                     variants=body.variants, repeats=body.repeats, tool_mode=body.tool_mode)
 
 
+@app.get("/api/experiments/source-agents", dependencies=read)
+async def api_source_agents(trace_ids: str = "") -> list[dict]:
+    """Agents that made model calls in these runs (comma-separated trace ids)."""
+    return await experiments.agents_in_runs([t.strip().lower() for t in trace_ids.split(",") if t.strip()][:200])
+
+
+@app.get("/api/models", dependencies=read)
+async def api_models(project: str | None = None) -> dict:
+    """Models to pick from: this project's (most used first) and the price catalog."""
+    return await experiments.models(project or None)
+
+
 @app.get("/api/experiments/sources", dependencies=read)
 async def api_experiment_sources(root_name: str, project: str | None = None, limit: int = Query(20, ge=1, le=100)) -> list[dict]:
     return await experiments.recent_sources(project or None, root_name, limit)

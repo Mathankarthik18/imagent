@@ -6,6 +6,7 @@ import { pp } from "../lib/project";
 import { useAppState } from "../lib/state";
 import { Tile } from "./FlowView";
 import { Icon } from "./icons";
+import { ModelPicker, type ModelOption } from "./ModelPicker";
 import { Time } from "./Time";
 import { controlCls } from "./ui";
 
@@ -98,6 +99,25 @@ export function NewExperiment({ onClose, preselected = [], rootName, focusAgent 
     return [...s].filter(Boolean).sort();
   }, [agent, bp.data]);
 
+  // Which agents made model calls in the runs picked in step 1 — only those can be affected.
+  const pickedIds = [...picked].sort().join(",");
+  const used = useQuery({
+    enabled: picked.size > 0, queryKey: ["source-agents", pickedIds],
+    queryFn: () => api<{ agent: string; runs: number; llm_calls: number }[]>("/api/experiments/source-agents", { trace_ids: pickedIds }),
+  });
+  const usedAgents = useMemo(() => new Map((used.data ?? []).map((u) => [u.agent, u.runs])), [used.data]);
+  const models = useQuery({ queryKey: ["models", project], staleTime: 300_000,
+    queryFn: () => api<{ used: { model: string; calls: number }[]; catalog: { id: string; input: number; output: number }[] }>("/api/models", { project }) });
+  const modelOptions = useMemo((): ModelOption[] => {
+    const usedIds = new Set<string>();
+    const out: ModelOption[] = [];
+    for (const u of models.data?.used ?? []) { usedIds.add(u.model); out.push({ id: u.model, group: "used", note: `${u.calls.toLocaleString()} calls` }); }
+    for (const m of modelSuggestions) if (!usedIds.has(m)) out.push({ id: m, group: "used" });
+    const price = (n: number) => (n < 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(n < 10 ? 1 : 0)}`);
+    for (const c of models.data?.catalog ?? []) out.push({ id: c.id, group: "catalog", note: `${price(c.input)} / ${price(c.output)} per 1M` });
+    return out;
+  }, [models.data, modelSuggestions]);
+
   const [variants, setVariants] = useState<VariantDraft[]>([
     focusAgent ? { name: "", mode: "per", model: "", perAgent: { [focusAgent]: "" } } : { name: "", mode: "all", model: "", perAgent: {} }]);
   const [tab, setTab] = useState(0);
@@ -181,8 +201,8 @@ export function NewExperiment({ onClose, preselected = [], rootName, focusAgent 
                 )}
               </div>
               <VariantEditor key={tab} v={variants[tab]} letter={LETTERS[tab]} index={tab} tree={tree} currentModel={currentModel}
+                modelOptions={modelOptions} usedAgents={usedAgents} runsPicked={picked.size} focusAgent={focusAgent}
                 onChange={(p) => setVariant(tab, p)} onRemove={variants.length > 1 ? () => removeVariant(tab) : undefined} />
-              <datalist id="model-suggestions">{modelSuggestions.map((m) => <option key={m} value={m} />)}</datalist>
             </Step>
 
             {/* 3 · options */}
@@ -329,11 +349,11 @@ function RunPicker({ runs, loading, picked, setPicked, root }: {
   );
 }
 
-function VariantEditor({ v, letter, index, tree, currentModel, onChange, onRemove }: {
-  v: VariantDraft; letter: string; index: number; tree: TreeRow[]; currentModel: string;
+function VariantEditor({ v, letter, index, tree, currentModel, modelOptions, usedAgents, runsPicked, focusAgent, onChange, onRemove }: {
+  v: VariantDraft; letter: string; index: number; tree: TreeRow[]; currentModel: string; modelOptions: ModelOption[];
+  usedAgents: Map<string, number>; runsPicked: number; focusAgent?: string;
   onChange: (patch: Partial<VariantDraft>) => void; onRemove?: () => void;
 }) {
-  const setAgentModel = (agent: string, model: string) => onChange({ perAgent: { ...v.perAgent, [agent]: model } });
   const changed = Object.keys(picks(v)).length;
   return (
     <div className="pt-3">
@@ -352,52 +372,132 @@ function VariantEditor({ v, letter, index, tree, currentModel, onChange, onRemov
       </div>
 
       {v.mode === "all" ? (
-        <div className="flex items-center gap-3">
+        <div className="flex items-end gap-3">
           <label className="flex-1">
             <span className="mb-1 block text-[12px] text-ink-3">Model for the whole run</span>
-            <input autoFocus className={`${controlCls} h-8 w-full font-mono text-[12.5px]`} list="model-suggestions" value={v.model}
-              placeholder="e.g. z-ai/glm-5.2" onChange={(e) => onChange({ model: e.target.value })} />
+            <ModelPicker autoFocus value={v.model} onChange={(model) => onChange({ model })} options={modelOptions} />
           </label>
           {currentModel && (
-            <div className="shrink-0 text-[12px] text-ink-3">
-              <span className="mb-1 block">Runs today on</span>
-              <span className="font-mono text-ink-2">{short(currentModel)}</span>
-            </div>
+            <div className="shrink-0 pb-1.5 text-[12px] text-ink-3">Runs today on <span className="font-mono text-ink-2">{short(currentModel)}</span></div>
           )}
         </div>
       ) : tree.length ? (
-        <div className="overflow-hidden rounded-md border border-line">
-          <div className="flex items-center gap-2 border-b border-line bg-panel px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.05em] text-ink-3">
-            <span className="flex-1">Agent</span><span className="w-36">Runs today on</span><span className="w-56">Use instead</span>
-          </div>
-          <div className="max-h-64 overflow-auto">
-            {tree.map((r) => {
-              const val = v.perAgent[r.name] ?? "";
-              return (
-                <div key={r.name} className={`flex items-center gap-2 border-b border-line/60 px-3 py-1 last:border-0 ${val.trim() ? "bg-accent-soft/40" : ""} ${r.runs || val ? "" : "opacity-60"}`}
-                  title={r.runs ? undefined : "No runs in the last 7 days"}>
-                  <span className="flex min-w-0 flex-1 items-center gap-2" style={{ paddingLeft: r.depth * 16 }}>
-                    <Tile role={r.depth === 0 ? "main" : "sub"} size={18} />
-                    <span className="truncate text-[12.5px]">{r.name}</span>
-                  </span>
-                  <span className="w-36 truncate font-mono text-[11.5px] text-ink-3" title={r.model}>{r.model ? short(r.model) : "—"}</span>
-                  <input className={`${controlCls} h-6 w-56 font-mono text-[11.5px]`} list="model-suggestions" value={val}
-                    placeholder="unchanged" onChange={(e) => setAgentModel(r.name, e.target.value)} />
-                </div>
-              );
-            })}
-          </div>
-          <p className="border-t border-line bg-panel px-3 py-1.5 text-[11.5px] text-ink-3">Agents left empty keep the model they run on today.</p>
-        </div>
+        <AgentModels v={v} tree={tree} modelOptions={modelOptions} usedAgents={usedAgents} runsPicked={runsPicked}
+          focusAgent={focusAgent} onChange={onChange} />
       ) : (
-        <FreeFormAgents v={v} onChange={onChange} />
+        <FreeFormAgents v={v} modelOptions={modelOptions} onChange={onChange} />
       )}
     </div>
   );
 }
 
+/** Per-agent models: agents that ran in the picked runs first; tick some, set one model for all of them. */
+function AgentModels({ v, tree, modelOptions, usedAgents, runsPicked, focusAgent, onChange }: {
+  v: VariantDraft; tree: TreeRow[]; modelOptions: ModelOption[]; usedAgents: Map<string, number>; runsPicked: number;
+  focusAgent?: string; onChange: (patch: Partial<VariantDraft>) => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(focusAgent ? [focusAgent] : []));
+  const [model, setModel] = useState("");
+  const [q, setQ] = useState("");
+  const [showOthers, setShowOthers] = useState(false);
+  const set = picks(v);
+  const known = usedAgents.size > 0;
+  const match = (r: TreeRow) => !q || r.name.toLowerCase().includes(q.toLowerCase());
+  const usedRows = tree.filter((r) => usedAgents.has(r.name) && match(r));
+  const otherRows = tree.filter((r) => !usedAgents.has(r.name) && match(r));
+  const toggle = (name: string) => setSelected((s) => { const n = new Set(s); if (n.has(name)) n.delete(name); else n.add(name); return n; });
+  const apply = () => {
+    const m = model.trim();
+    if (!m || !selected.size) return;
+    onChange({ perAgent: { ...v.perAgent, ...Object.fromEntries([...selected].map((a) => [a, m])) } });
+    setSelected(new Set());
+    setModel("");
+  };
+  const unset = (agent: string) => { const n = { ...v.perAgent }; delete n[agent]; onChange({ perAgent: n }); };
+
+  const row = (r: TreeRow, dim: boolean) => {
+    const assigned = set[r.name];
+    const on = selected.has(r.name);
+    return (
+      <label key={r.name} className={`flex cursor-pointer items-center gap-2.5 border-b border-line/60 px-3 py-1.5 last:border-0 ${on ? "bg-accent-soft/40" : "hover:bg-hover"} ${dim && !assigned ? "opacity-60" : ""}`}>
+        <input type="checkbox" className="accent-[var(--accent)]" checked={on} onChange={() => toggle(r.name)} />
+        <Tile role={r.depth === 0 ? "main" : "sub"} size={18} />
+        <span className="min-w-0 flex-1 truncate text-[12.5px]">{r.name}</span>
+        {usedAgents.has(r.name) && <span className="num shrink-0 text-[11px] text-ink-3">in {usedAgents.get(r.name)} of {runsPicked} runs</span>}
+        <span className="w-32 shrink-0 truncate text-right font-mono text-[11.5px] text-ink-3" title={r.model}>{r.model ? short(r.model) : "—"}</span>
+        <span className="w-40 shrink-0 text-right">
+          {assigned ? (
+            <span className="inline-flex max-w-full items-center gap-1 rounded bg-accent-soft px-1.5 py-0.5 font-mono text-[11.5px] text-ink">
+              → <span className="truncate">{short(assigned)}</span>
+              <button type="button" onClick={(e) => { e.preventDefault(); unset(r.name); }} className="text-ink-3 hover:text-ink" aria-label={`Keep ${r.name} unchanged`}>
+                <Icon.close size={11} />
+              </button>
+            </span>
+          ) : <span className="text-[11.5px] text-ink-3">unchanged</span>}
+        </span>
+      </label>
+    );
+  };
+
+  return (
+    <div>
+      {Object.keys(set).length > 0 && (
+        <div className="mb-2.5 flex flex-wrap gap-1.5">
+          {Object.entries(set).map(([agent, m]) => (
+            <span key={agent} className="inline-flex items-center gap-1.5 rounded-md border border-line bg-panel px-2 py-1 text-[12px]">
+              <span className="text-ink-2">{agent}</span><span className="text-ink-3">→</span><span className="font-mono">{short(m)}</span>
+              <button type="button" onClick={() => unset(agent)} className="text-ink-3 hover:text-ink" aria-label={`Keep ${agent} unchanged`}><Icon.close size={11} /></button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="rounded-md border border-line">{/* no overflow clip: the model dropdown must hang out of it */}
+        <div className="flex flex-wrap items-center gap-2 rounded-t-md border-b border-line bg-panel px-3 py-2">
+          <input className={`${controlCls} w-44`} placeholder="Find agent" value={q} onChange={(e) => setQ(e.target.value)} />
+          {known && (
+            <button type="button" onClick={() => setSelected(new Set(tree.filter((r) => usedAgents.has(r.name)).map((r) => r.name)))}
+              className="text-[12px] text-accent hover:underline">Select all used</button>
+          )}
+          {selected.size > 0 && <button type="button" onClick={() => setSelected(new Set())} className="text-[12px] text-ink-3 hover:text-ink">Clear</button>}
+          <div className="ml-auto flex min-w-[320px] flex-1 items-center gap-2">
+            <ModelPicker value={model} onChange={setModel} options={modelOptions} className="flex-1"
+              placeholder={selected.size ? `Model for ${selected.size} selected agent${selected.size === 1 ? "" : "s"}` : "Tick agents, then pick a model"} />
+            <button type="button" disabled={!selected.size || !model.trim()} onClick={apply}
+              className="h-8 shrink-0 rounded-md bg-ink px-3 text-[12.5px] font-medium text-bg disabled:opacity-40">
+              Apply{selected.size ? ` to ${selected.size}` : ""}
+            </button>
+          </div>
+        </div>
+
+        <div className="max-h-80 overflow-auto">
+          {!runsPicked ? (
+            <p className="border-b border-line/60 px-3 py-2 text-[12px] text-ink-3">Pick runs in step 1 to see which agents they actually use.</p>
+          ) : known ? (
+            <div className="border-b border-line/60 bg-panel/60 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.05em] text-ink-3">
+              Used in your {runsPicked} selected run{runsPicked === 1 ? "" : "s"} · {usedRows.length}
+            </div>
+          ) : null}
+          {(known ? usedRows : tree.filter(match)).map((r) => row(r, false))}
+          {known && otherRows.length > 0 && (
+            <>
+              <button type="button" onClick={() => setShowOthers((o) => !o)}
+                className="flex w-full items-center gap-1.5 border-b border-line/60 bg-panel/60 px-3 py-1.5 text-left text-[11.5px] text-ink-3 hover:text-ink">
+                <Icon.chevronRight size={11} className={`transition-transform ${showOthers || q ? "rotate-90" : ""}`} />
+                Other agents · {otherRows.length} — didn't run in these runs, so changing them has no effect
+              </button>
+              {(showOthers || q) && otherRows.map((r) => row(r, true))}
+            </>
+          )}
+        </div>
+      </div>
+      <p className="mt-1.5 text-[11.5px] text-ink-3">Agents you don't change keep the model they run on today.</p>
+    </div>
+  );
+}
+
 /** No blueprint yet: type the agent names. */
-function FreeFormAgents({ v, onChange }: { v: VariantDraft; onChange: (patch: Partial<VariantDraft>) => void }) {
+function FreeFormAgents({ v, modelOptions, onChange }: { v: VariantDraft; modelOptions: ModelOption[]; onChange: (patch: Partial<VariantDraft>) => void }) {
   const rows = Object.entries(v.perAgent);
   const [draft, setDraft] = useState({ agent: "", model: "" });
   return (
@@ -405,16 +505,14 @@ function FreeFormAgents({ v, onChange }: { v: VariantDraft; onChange: (patch: Pa
       {rows.map(([a, m]) => (
         <div key={a} className="flex items-center gap-2 text-[12.5px]">
           <span className="w-44 truncate font-mono">{a}</span><span className="text-ink-3">uses</span>
-          <input className={`${controlCls} flex-1 font-mono text-[12px]`} list="model-suggestions" value={m}
-            onChange={(e) => onChange({ perAgent: { ...v.perAgent, [a]: e.target.value } })} />
+          <span className="flex-1 font-mono">{m}</span>
           <button onClick={() => { const n = { ...v.perAgent }; delete n[a]; onChange({ perAgent: n }); }} className="text-ink-3 hover:text-ink"><Icon.close size={12} /></button>
         </div>
       ))}
       <div className="flex items-center gap-2">
-        <input className={`${controlCls} w-44 font-mono text-[12px]`} placeholder="agent name" value={draft.agent} onChange={(e) => setDraft({ ...draft, agent: e.target.value })} />
+        <input className={`${controlCls} h-8 w-44 font-mono text-[12px]`} placeholder="agent name" value={draft.agent} onChange={(e) => setDraft({ ...draft, agent: e.target.value })} />
         <span className="text-[12.5px] text-ink-3">uses</span>
-        <input className={`${controlCls} flex-1 font-mono text-[12px]`} list="model-suggestions" placeholder="model" value={draft.model}
-          onChange={(e) => setDraft({ ...draft, model: e.target.value })} />
+        <ModelPicker value={draft.model} onChange={(model) => setDraft({ ...draft, model })} options={modelOptions} className="flex-1" />
         <button disabled={!draft.agent.trim() || !draft.model.trim()} className="text-[12.5px] text-accent disabled:opacity-40"
           onClick={() => { onChange({ perAgent: { ...v.perAgent, [draft.agent.trim()]: draft.model.trim() } }); setDraft({ agent: "", model: "" }); }}>Add</button>
       </div>

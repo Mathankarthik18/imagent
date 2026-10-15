@@ -685,3 +685,28 @@ def test_live_jobs_wait_for_a_live_connection(client):
     # Once the agent has run, the live job goes out.
     got = client.post("/api/runner/claim", json={**claim, "live_agents": ["lbot"]}, headers=key).json()
     assert got["experiment_id"] == live["id"] and got["tool_mode"] == "live"
+
+
+def test_new_experiment_helpers_agents_in_runs_and_models(client):
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exp_ = InMemorySpanExporter()
+    tp = TracerProvider(resource=Resource.create({"service.name": "helpers-test"}))
+    tp.add_span_processor(SimpleSpanProcessor(exp_))
+    tr = tp.get_tracer("imagent")
+    with tr.start_as_current_span("boss", attributes={"imagent.span_kind": "agent", "imagent.root": True, "gen_ai.agent.name": "boss"}) as root:
+        for agent, model in (("boss", "m-big"), ("noon", "m-small"), ("noon", "m-small")):
+            with tr.start_as_current_span(model, attributes={"imagent.span_kind": "llm", "gen_ai.request.model": model,
+                                                             "gen_ai.agent.name": agent}):
+                pass
+    _post_spans(client, exp_.get_finished_spans())
+    tid = format(root.get_span_context().trace_id, "032x")
+
+    agents = client.get("/api/experiments/source-agents", params={"trace_ids": tid}).json()
+    assert {a["agent"]: a["llm_calls"] for a in agents} == {"noon": 2, "boss": 1}
+    assert client.get("/api/experiments/source-agents", params={"trace_ids": ""}).json() == []
+    m = client.get("/api/models", params={"project": "helpers-test"}).json()
+    assert [u["model"] for u in m["used"]] == ["m-small", "m-big"] and isinstance(m["catalog"], list)
