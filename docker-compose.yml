@@ -14,6 +14,8 @@ services:
       - "127.0.0.1:8123:8123"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/server.xml:/etc/clickhouse-server/config.d/imagent.xml:ro
+      - ./clickhouse/users.xml:/etc/clickhouse-server/users.d/imagent.xml:ro
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
     healthcheck:

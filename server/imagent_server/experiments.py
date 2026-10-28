@@ -344,11 +344,15 @@ async def recent_sources(project: str | None, root_name: str, limit: int = 20) -
     if project:
         params["project"] = project
         where += " AND project = {project:String}"
+    # Pick the runs first, then read payloads for just those (never across all history).
     rows = await query(f"""
-        SELECT trace_id, any(project) AS project, min(start_time) AS start_time, any(thread_id) AS thread_id,
-               any(input) AS input, any(output) AS output
-        FROM {SPANS} WHERE {where}
-        GROUP BY trace_id ORDER BY min(start_time) DESC LIMIT {{limit:UInt32}}
+        SELECT trace_id, project, start_time, thread_id, input, output
+        FROM {SPANS}
+        WHERE {where} AND trace_id IN (
+            SELECT trace_id FROM {SPANS} WHERE {where}
+            GROUP BY trace_id ORDER BY min(start_time) DESC LIMIT {{limit:UInt32}})
+        ORDER BY start_time DESC
+        LIMIT 1 BY trace_id
     """, params)
     return [{"trace_id": r["trace_id"], "project": r["project"], "start_time": r["start_time"], "thread_id": r["thread_id"],
              "input_text": compare.readable(r["input"], roles=("user", "human"))[:200],

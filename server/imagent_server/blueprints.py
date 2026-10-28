@@ -94,7 +94,8 @@ async def stats(project: str, days: int, names: list[str] | None = None) -> dict
     A model or tool call belongs to the agent whose graph ran it: its parent is a graph node
     ("model", "tools") and that node's parent is the agent's run span. Owning by the tree works
     for spans recorded before the SDK stamped sub-agents correctly (their ``agent_name`` was the
-    main agent's); LangChain's ``lc_agent_name`` and the ``agent_name`` column are fallbacks."""
+    main agent's); the ``agent_name`` column is the fallback. Never reads payload or metadata
+    columns — a week of them doesn't fit a small ClickHouse."""
     names = sorted(set(names or []))
     where = "project = {p:String} AND origin = '' AND start_time >= now() - toIntervalDay({d:UInt32})"
     params = {"p": project, "d": days, "names": names}
@@ -106,8 +107,7 @@ async def stats(project: str, days: int, names: list[str] | None = None) -> dict
                  INNER JOIN (SELECT span_id, name FROM {SPANS} WHERE {where} AND {runs_of}) AS a
                    ON n.parent_span_id = a.span_id
                  GROUP BY n.span_id)"""
-    who = ("multiIf(o.owner != '', o.owner, JSONExtractString(s.metadata, 'lc_agent_name') != '', "
-           "JSONExtractString(s.metadata, 'lc_agent_name'), s.agent_name)")
+    who = "if(o.owner != '', o.owner, toString(s.agent_name))"
     agents = await query(f"""
         SELECT name, kind, count() AS runs, countIf(status = 'error') AS errors,
                quantile(0.5)(duration_ms) AS p50, quantile(0.95)(duration_ms) AS p95, max(start_time) AS last_run
@@ -116,14 +116,14 @@ async def stats(project: str, days: int, names: list[str] | None = None) -> dict
         SELECT {who} AS agent, s.model AS model, count() AS calls, countIf(s.status = 'error') AS errors,
                sum(s.input_tokens) AS input_tokens, sum(s.output_tokens) AS output_tokens, sum(s.cost_usd) AS cost,
                quantile(0.5)(s.duration_ms) AS p50, quantile(0.95)(s.duration_ms) AS p95
-        FROM (SELECT parent_span_id, model, status, input_tokens, output_tokens, cost_usd, duration_ms, metadata,
+        FROM (SELECT parent_span_id, model, status, input_tokens, output_tokens, cost_usd, duration_ms,
                      agent_name FROM {SPANS} WHERE {where} AND kind = 'llm') AS s
         LEFT JOIN {owner} AS o ON s.parent_span_id = o.node_id
         GROUP BY agent, model""", params)
     tools = await query(f"""
         SELECT {who} AS agent, s.name AS name, count() AS calls, countIf(s.status = 'error') AS errors,
                quantile(0.5)(s.duration_ms) AS p50, quantile(0.95)(s.duration_ms) AS p95, max(s.start_time) AS last_call
-        FROM (SELECT parent_span_id, name, status, duration_ms, start_time, metadata, agent_name
+        FROM (SELECT parent_span_id, name, status, duration_ms, start_time, agent_name
                      FROM {SPANS} WHERE {where} AND kind = 'tool') AS s
         LEFT JOIN {owner} AS o ON s.parent_span_id = o.node_id
         GROUP BY agent, name""", params)
