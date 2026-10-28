@@ -99,9 +99,11 @@ _TRACE_AGG = """
     countIf(status = 'error') AS error_count,
     substring(argMinIf(status_message, start_time, status = 'error'), 1, 300) AS error_message,
     count() AS span_count,
-    argMin(input, if(is_root = 1, 0, 1) * 1e18 + toUnixTimestamp64Micro(start_time)) AS root_input,
-    argMin(output, if(is_root = 1, 0, 1) * 1e18 + toUnixTimestamp64Micro(start_time)) AS root_output
+    argMin(span_id, if(is_root = 1, 0, 1) * 1e18 + toUnixTimestamp64Micro(start_time)) AS root_span_id
 """
+# Payloads (input/output) are never aggregated across the window: an agent's input is its whole
+# conversation (hundreds of KB), so carrying it per trace through a month of runs needs GBs of
+# memory. Lists page through traces without payloads, then read the root span of each row shown.
 
 
 def _content_text(msg: str) -> str:
@@ -133,11 +135,28 @@ def _readable(col: str, roles: tuple[str, ...]) -> str:
 
 
 _TRACE_TEXT = f"""
-    {_readable('root_input', ('user', 'human'))} AS input_text,
-    {_readable('root_output', ('assistant', 'ai'))} AS output_text,
-    substring(root_input, 1, {{preview:UInt32}}) AS input_preview,
-    substring(root_output, 1, {{preview:UInt32}}) AS output_preview
+    {_readable('input', ('user', 'human'))} AS input_text,
+    {_readable('output', ('assistant', 'ai'))} AS output_text,
+    substring(input, 1, {{preview:UInt32}}) AS input_preview,
+    substring(output, 1, {{preview:UInt32}}) AS output_preview
 """
+
+
+async def _root_texts(roots: list[tuple[str, str]], preview_chars: int) -> dict[tuple[str, str], dict[str, Any]]:
+    """Readable input/output of each (trace_id, root span_id) — only the spans on screen."""
+    if not roots:
+        return {}
+    rows = await query(f"""
+        SELECT trace_id, span_id, {_TRACE_TEXT}
+        FROM {SPANS}
+        WHERE trace_id IN {{ids:Array(String)}} AND span_id IN {{spans:Array(String)}}
+        ORDER BY inserted_at DESC
+        LIMIT 1 BY trace_id, span_id
+    """, {"ids": sorted({t for t, _ in roots}), "spans": sorted({s for _, s in roots}), "preview": preview_chars})
+    return {(r.pop("trace_id"), r.pop("span_id")): r for r in rows}
+
+
+_NO_TEXT = {"input_text": "", "output_text": "", "input_preview": "", "output_preview": ""}
 
 
 NO_THREAD = "__none__"  # thread_id filter value selecting traces without a thread
@@ -152,9 +171,8 @@ _THREAD_SORTS = {
 }
 
 
-def _trace_subquery(f: Filters, params: dict[str, Any], preview_chars: int = 300) -> str:
-    """One row per trace (filters applied); the building block for trace and thread lists."""
-    params["preview"] = preview_chars
+def _trace_subquery(f: Filters, params: dict[str, Any]) -> str:
+    """One row per trace (filters applied, no payloads); the building block for trace and thread lists."""
     where = _base_where(f, params)
     match = _trace_match(f, params)
     if match:
@@ -176,12 +194,15 @@ async def list_traces(f: Filters, limit: int = 50, offset: int = 0, order: str =
     params: dict[str, Any] = {"limit": limit + 1, "offset": offset}
     direction = "ASC" if order == "asc" else "DESC"
     sql = f"""
-        SELECT * EXCEPT (root_input, root_output), {_TRACE_TEXT}
-        FROM ({_trace_subquery(f, params, preview_chars)})
+        SELECT *
+        FROM ({_trace_subquery(f, params)})
         ORDER BY start_time {direction}
         LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}
     """
-    rows = await query(sql, params)
+    rows = (await query(sql, params))[: limit + 1]
+    texts = await _root_texts([(r["trace_id"], r["root_span_id"]) for r in rows[:limit]], preview_chars)
+    for r in rows:
+        r.update(texts.get((r["trace_id"], r.pop("root_span_id")), _NO_TEXT))
     return {"items": rows[:limit], "has_more": len(rows) > limit}
 
 
@@ -204,7 +225,7 @@ async def thread_groups(f: Filters, *, sort: str = "recent", include_unthreaded:
     """Traces matching the filters, grouped by thread. ``thread_id == ''`` is the
     "(no thread)" bucket when ``include_unthreaded``."""
     params: dict[str, Any] = {"limit": limit + 1, "offset": offset}
-    sub = _trace_subquery(f, params, preview_chars=200)
+    sub = _trace_subquery(f, params)
     where = "" if include_unthreaded else "WHERE thread_id != ''"
     sql = f"""
         SELECT
@@ -227,8 +248,8 @@ async def thread_groups(f: Filters, *, sort: str = "recent", include_unthreaded:
             countIf(error_count > 0) AS error_traces,
             sum(error_count) AS error_count,
             argMax(name, start_time) AS last_trace_name,
-            {_readable('argMin(root_input, start_time)', ('user', 'human'))} AS first_input_text,
-            {_readable('argMax(root_input, start_time)', ('user', 'human'))} AS last_input_text
+            argMin((trace_id, root_span_id), start_time) AS first_root,
+            argMax((trace_id, root_span_id), start_time) AS last_root
         FROM ({sub})
         {where}
         GROUP BY thread_id
@@ -236,7 +257,13 @@ async def thread_groups(f: Filters, *, sort: str = "recent", include_unthreaded:
         LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}
     """
     rows = await query(sql, params)
-    return {"items": rows[:limit], "has_more": len(rows) > limit}
+    shown = rows[:limit]
+    texts = await _root_texts([tuple(r[k]) for r in shown for k in ("first_root", "last_root")], 200)
+    for r in rows:
+        first, last = tuple(r.pop("first_root")), tuple(r.pop("last_root"))
+        r["first_input_text"] = texts.get(first, _NO_TEXT)["input_text"]
+        r["last_input_text"] = texts.get(last, _NO_TEXT)["input_text"]
+    return {"items": shown, "has_more": len(rows) > limit}
 
 
 async def thread_summary(thread_id: str, f: Filters) -> dict[str, Any]:
