@@ -14,6 +14,8 @@ import { ErrorBox, Panel, Spinner } from "./ui";
 import { Icon } from "./icons";
 import { Link } from "react-router-dom";
 import { pp } from "../lib/project";
+import { DiagnosisPanel, useTraceDiagnosis } from "./Diagnosis";
+import { Drawer } from "./Drawer";
 
 export function useTrace(traceId: string) {
   return useQuery({
@@ -82,6 +84,7 @@ export function TraceView({ traceId, selected, onSelect, splitId = "trace", heig
             className="inline-flex h-7 items-center gap-1.5 rounded-md bg-ink px-2.5 text-[12px] font-medium text-bg"><Icon.play size={11} /> Replay</button>
         )}
         {!player.on && stats.llm > 0 && <TryModel traceId={traceId} root={stats.root} span={span} spans={spans} />}
+        {!player.on && <DiagnoseRun traceId={traceId} failed={stats.failed > 0} />}
         <span><span className="text-ink">{fmtDuration(stats.duration)}</span> {stats.running ? "so far" : "total"}</span>
         <span><span className="text-ink">{spans.length}</span> spans</span>
         <span><span className="text-ink">{stats.llm}</span> LLM · <span className="text-ink">{stats.tools}</span> tool calls</span>
@@ -115,6 +118,29 @@ export function TraceView({ traceId, selected, onSelect, splitId = "trace", heig
         )} />
       {player.on && <PlayerBar player={player} />}
     </div>
+  );
+}
+
+
+/** Diagnose this run: root cause and a suggested fix, in a side panel. */
+function DiagnoseRun({ traceId, failed }: { traceId: string; failed: boolean }) {
+  const [open, setOpen] = useState(false);
+  const d = useTraceDiagnosis(traceId, true);
+  const state = d.data?.status;
+  return (
+    <>
+      <button onClick={() => setOpen(true)} title="Find the root cause of what went wrong in this run, and a fix"
+        className={`inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[12px] font-medium hover:border-line-strong hover:text-ink ${failed && !state ? "border-critical/50 text-critical" : "border-line text-ink-2"}`}>
+        <Icon.issues size={12} /> {state === "running" ? "Diagnosing…" : state === "done" ? "Diagnosis" : "Diagnose"}
+      </button>
+      {open && (
+        <Drawer title="Diagnose this run" onClose={() => setOpen(false)}>
+          <div className="p-4">
+            <DiagnosisPanel diagnosis={d.data} startPath={`/api/traces/${traceId}/diagnose`} queryKey={["diagnosis", "trace", traceId]} compact />
+          </div>
+        </Drawer>
+      )}
+    </>
   );
 }
 

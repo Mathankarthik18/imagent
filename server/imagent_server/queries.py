@@ -448,3 +448,17 @@ async def latest(project: str | None) -> dict[str, Any]:
 async def projects() -> list[str]:
     rows = await query(f"SELECT DISTINCT project FROM {SPANS} ORDER BY project")
     return [r["project"] for r in rows]
+
+
+_FRAMEWORK_NAMES = {"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute", "write_todos",
+                    "task", "LangGraph", "model", "tools", "agent", "RunnableSequence"}
+
+
+async def app_names(project: str, limit: int = 6) -> list[str]:
+    """The app's own tool and agent names, most used first — distinctive strings to find its code by."""
+    rows = await query(f"""
+        SELECT name, count() AS n FROM {SPANS}
+        WHERE project = {{p:String}} AND origin = '' AND kind IN ('tool', 'agent')
+          AND start_time >= now() - INTERVAL 30 DAY
+        GROUP BY name ORDER BY n DESC LIMIT 40""", {"p": project})
+    return [r["name"] for r in rows if r["name"] not in _FRAMEWORK_NAMES and len(r["name"]) >= 6][:limit]

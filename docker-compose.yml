@@ -39,6 +39,10 @@ services:
       IMAGENT_JUDGE_API_KEY: ${IMAGENT_JUDGE_API_KEY:-}
       IMAGENT_JUDGE_MODEL: ${IMAGENT_JUDGE_MODEL:-anthropic/claude-sonnet-5.5}
       IMAGENT_JUDGE_BASE_URL: ${IMAGENT_JUDGE_BASE_URL:-https://openrouter.ai/api/v1}
+      # "Connect GitHub" for diagnosing issues: a GitHub App with device flow on — see deploy/server/README.md.
+      IMAGENT_GITHUB_CLIENT_ID: ${IMAGENT_GITHUB_CLIENT_ID:-}
+      IMAGENT_GITHUB_CLIENT_SECRET: ${IMAGENT_GITHUB_CLIENT_SECRET:-}
+      IMAGENT_GITHUB_APP_SLUG: ${IMAGENT_GITHUB_APP_SLUG:-}
     ports:
       # Local-only by default. A server that other machines send to sets IMAGENT_BIND=0.0.0.0
       # (and IMAGENT_READ_KEY) in ./.env — see deploy/server/README.md.

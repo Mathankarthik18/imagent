@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
 
-from . import blueprints, compare, db, experiments, judge, live, price_sync, projects, queries, stitch
+from . import blueprints, compare, db, diagnose, experiments, github, judge, live, price_sync, projects, queries, stitch
 from . import pricing
 from .config import settings
 from .ingest import decode_request, split_rows
@@ -38,6 +38,7 @@ async def lifespan(app: FastAPI):
         await db.query("SELECT 1")
     tasks.append(asyncio.create_task(live.reap_forever()))  # close runs that stopped reporting
     tasks.append(asyncio.create_task(judge.worker()))  # judges projects that have a key (theirs or the server's)
+    tasks.append(asyncio.create_task(diagnose.worker()))  # groups failures into issues every few hours
     yield
     for t in tasks:
         t.cancel()
@@ -169,6 +170,10 @@ class ProjectPatch(BaseModel):
     judge_key: str | None = Field(None, max_length=400)
     judge_model: str | None = Field(None, max_length=200)
     judge_base_url: str | None = Field(None, max_length=400)
+    github_repo: str | None = Field(None, max_length=200, pattern=r"^$|^[\w.-]+/[\w.-]+$")
+    github_token: str | None = Field(None, max_length=400)
+    github_branch: str | None = Field(None, max_length=200)
+    github_path: str | None = Field(None, max_length=300)
 
 
 @app.post("/api/projects", dependencies=read)
@@ -192,7 +197,8 @@ async def api_project(project_id: str) -> dict:
 async def api_update_project(project_id: str, body: ProjectPatch) -> dict:
     p = await projects.update(project_id, name=body.name, description=body.description, archived=body.archived,
                               rubric=body.rubric, judge_key=body.judge_key, judge_model=body.judge_model,
-                              judge_base_url=body.judge_base_url)
+                              judge_base_url=body.judge_base_url,
+                              github={k: getattr(body, k) for k in ("github_repo", "github_token", "github_branch", "github_path")})
     if not p:
         raise HTTPException(status_code=404, detail="project not found")
     return p
@@ -396,6 +402,175 @@ async def api_test_judge(project_id: str, body: JudgeTestIn) -> dict:
     if cfg is None:
         return {"ok": False, "error": "No API key — enter one first."}
     return await judge.test(cfg)
+
+
+class GithubTestIn(BaseModel):
+    repo: str = Field("", max_length=200)      # empty: test the saved settings
+    token: str = Field("", max_length=400)
+    branch: str = Field("", max_length=200)
+    path: str = Field("", max_length=300)
+
+
+@app.post("/api/projects/{project_id}/github/test", dependencies=read)
+async def api_test_github(project_id: str, body: GithubTestIn) -> dict:
+    """Check imagent can read the repo before (or after) saving it."""
+    p = await projects.get(project_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="project not found")
+    try:
+        saved = await github.config_for_project(p) or {}
+    except RuntimeError as exc:
+        return {"ok": False, "error": str(exc)}
+    cfg = github.config_for({**p, "github_token": saved.get("token", ""),
+                             **{f"github_{k}": v for k, v in body.model_dump().items() if v}})
+    if cfg is None:
+        return {"ok": False, "error": "Enter a repository (owner/name) first."}
+    return await asyncio.to_thread(github.check, cfg)
+
+
+@app.get("/api/github", dependencies=read)
+async def api_github_app() -> dict:
+    """Whether "Connect GitHub" is set up on this server (a GitHub App's client ID)."""
+    return github.app_status()
+
+
+_device_codes: dict[str, str] = {}  # project → device code of a "Connect GitHub" in progress
+
+
+@app.post("/api/projects/{project_id}/github/connect", dependencies=read)
+async def api_github_connect(project_id: str) -> dict:
+    """Start "Connect GitHub": returns the code to enter on github.com."""
+    if not github.CLIENT_ID:
+        raise HTTPException(status_code=400, detail="Connect GitHub isn't set up on this server (IMAGENT_GITHUB_CLIENT_ID)")
+    if not await projects.get(project_id):
+        raise HTTPException(status_code=404, detail="project not found")
+    d = await asyncio.to_thread(github.device_start)
+    if "device_code" not in d:
+        raise HTTPException(status_code=502, detail=d.get("error_description") or d.get("error") or "GitHub refused the request")
+    _device_codes[project_id] = d["device_code"]
+    return {k: d[k] for k in ("user_code", "verification_uri", "expires_in", "interval")}
+
+
+@app.post("/api/projects/{project_id}/github/poll", dependencies=read)
+async def api_github_poll(project_id: str) -> dict:
+    """Has the user approved the code yet? Saves the connection when they have."""
+    code = _device_codes.get(project_id)
+    if not code:
+        return {"status": "expired"}
+    r = await asyncio.to_thread(github.device_poll, code)
+    if r["status"] == "connected":
+        _device_codes.pop(project_id, None)
+        await projects.set_github_auth(project_id, token=r["token"], refresh=r["refresh"], expires=r["expires"], login=r["login"])
+        return {"status": "connected", "login": r["login"]}
+    if r["status"] in ("expired", "denied", "error"):
+        _device_codes.pop(project_id, None)
+    return {k: r[k] for k in ("status", "error", "interval") if r.get(k)}
+
+
+async def _github_token(project_id: str) -> str:
+    p = await projects.get(project_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="project not found")
+    try:
+        cfg = await github.config_for_project({**p, "github_repo": p.get("github_repo") or "-/-"})
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not cfg or not cfg["token"]:
+        raise HTTPException(status_code=409, detail="GitHub isn't connected for this project")
+    return cfg["token"]
+
+
+@app.get("/api/projects/{project_id}/github/repos", dependencies=read)
+async def api_github_repos(project_id: str) -> list[dict]:
+    """Repos the connected account lets imagent read."""
+    token = await _github_token(project_id)
+    return await asyncio.to_thread(github.repos, token)
+
+
+@app.get("/api/projects/{project_id}/github/suggest", dependencies=read)
+async def api_github_suggest(project_id: str, repo: str = Query(pattern=r"^[\w.-]+/[\w.-]+$"), branch: str = "") -> dict:
+    """Which folder of the repo is this app — found by searching for its agent and tool names."""
+    token = await _github_token(project_id)
+    names = await queries.app_names(project_id)
+    return await asyncio.to_thread(github.suggest_folder, {"repo": repo, "token": token, "branch": branch, "path": ""}, names)
+
+
+# ── Issues & diagnosis ──
+
+@app.get("/api/issues", dependencies=read)
+async def api_issues(project: str, status: str = Query("open", pattern="^(open|resolved|ignored|all)$")) -> list[dict]:
+    return await diagnose.list_issues(project, status)
+
+
+@app.post("/api/issues/scan", dependencies=read)
+async def api_scan_issues(project: str, days: int = Query(diagnose.WINDOW_DAYS, ge=1, le=90)) -> dict:
+    """Look for issues now instead of waiting for the next scheduled scan."""
+    return await diagnose.scan(project, days=days)
+
+
+@app.get("/api/issues/{issue_id}", dependencies=read)
+async def api_issue(issue_id: str) -> dict:
+    i = await diagnose.get_issue(issue_id)
+    if not i:
+        raise HTTPException(status_code=404, detail="issue not found")
+    return i | {"diagnosis": await diagnose.get_diagnosis(f"issue:{issue_id}")}
+
+
+class IssuePatch(BaseModel):
+    status: str = Field(pattern="^(open|resolved|ignored)$")
+
+
+@app.patch("/api/issues/{issue_id}", dependencies=read)
+async def api_update_issue(issue_id: str, body: IssuePatch) -> dict:
+    i = await diagnose.set_status(issue_id, body.status)
+    if not i:
+        raise HTTPException(status_code=404, detail="issue not found")
+    return i
+
+
+class DiagnoseIn(BaseModel):
+    note: str = Field("", max_length=2000)  # what the developer noticed, e.g. "the answer ignores the CP terms"
+
+
+@app.post("/api/issues/{issue_id}/diagnose", dependencies=read)
+async def api_diagnose_issue(issue_id: str, body: DiagnoseIn) -> dict:
+    i = await diagnose.get_issue(issue_id)
+    if not i:
+        raise HTTPException(status_code=404, detail="issue not found")
+    return {"started": await diagnose.start(f"issue:{issue_id}", i["project"], body.note)}
+
+
+@app.post("/api/traces/{trace_id}/diagnose", dependencies=read)
+async def api_diagnose_trace(trace_id: str, body: DiagnoseIn) -> dict:
+    spans = await queries.get_trace(trace_id)
+    if not spans:
+        raise HTTPException(status_code=404, detail="trace not found")
+    return {"started": await diagnose.start(f"trace:{trace_id}", spans[0]["project"], body.note)}
+
+
+async def _fix(target: str) -> dict:
+    try:
+        return await diagnose.create_fix(target)
+    except diagnose.StaleFix as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, github.WriteError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/issues/{issue_id}/fix", dependencies=read)
+async def api_issue_fix(issue_id: str) -> dict:
+    """Commit the diagnosis's fix to a new branch and open a draft PR."""
+    return await _fix(f"issue:{issue_id}")
+
+
+@app.post("/api/traces/{trace_id}/fix", dependencies=read)
+async def api_trace_fix(trace_id: str) -> dict:
+    return await _fix(f"trace:{trace_id}")
+
+
+@app.get("/api/traces/{trace_id}/diagnosis", dependencies=read)
+async def api_trace_diagnosis(trace_id: str) -> dict:
+    return {"diagnosis": await diagnose.get_diagnosis(f"trace:{trace_id}")}
 
 
 class ReviewIn(BaseModel):

@@ -89,14 +89,15 @@ def _prompt(question: str, tools: list[dict[str, Any]], x: str, y: str, rubric: 
     return [{"role": "system", "content": SYSTEM.format(rubric=rubric_line, fields=fields)}, {"role": "user", "content": user}]
 
 
-def _call(messages: list[dict[str, str]], cfg: dict[str, str] | None = None) -> tuple[str, float]:
+def _call(messages: list[dict[str, str]], cfg: dict[str, str] | None = None, *, max_tokens: int = 6000,
+          timeout: float = 120, title: str = "imagent judge") -> tuple[str, float]:
     cfg = cfg or {"key": API_KEY, "model": MODEL, "base_url": BASE_URL}
     # Reasoning models (GLM, o-series, …) spend tokens thinking before they answer — leave room.
-    body = json.dumps({"model": cfg["model"], "messages": messages, "temperature": 0, "max_tokens": 6000,
+    body = json.dumps({"model": cfg["model"], "messages": messages, "temperature": 0, "max_tokens": max_tokens,
                        "usage": {"include": True}}).encode()
     req = urllib.request.Request(f"{cfg['base_url']}/chat/completions", data=body, method="POST", headers={
-        "Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json", "X-Title": "imagent judge"})
-    with urllib.request.urlopen(req, timeout=120) as r:  # noqa: S310 — endpoint from config
+        "Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json", "X-Title": title})
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 — endpoint from config
         data = json.loads(r.read())
     msg = data["choices"][0]["message"]
     text = msg.get("content") or ""

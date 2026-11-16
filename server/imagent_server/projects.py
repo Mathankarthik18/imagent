@@ -41,6 +41,13 @@ DDL = [
         judge_key    String DEFAULT '',
         judge_model  String DEFAULT '',
         judge_base_url String DEFAULT '',
+        github_repo  String DEFAULT '',
+        github_token String DEFAULT '',
+        github_branch String DEFAULT '',
+        github_path  String DEFAULT '',
+        github_login String DEFAULT '',
+        github_refresh String DEFAULT '',
+        github_expires String DEFAULT '',
         created_at   DateTime64(3, 'UTC'),
         updated_at   DateTime64(3, 'UTC') DEFAULT now64(3)
     ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY id
@@ -48,10 +55,13 @@ DDL = [
 ]
 
 DDL += [f"ALTER TABLE {PROJECTS} ADD COLUMN IF NOT EXISTS {c} String DEFAULT ''"
-        for c in ("rubric", "judge_key", "judge_model", "judge_base_url")]
+        for c in ("rubric", "judge_key", "judge_model", "judge_base_url",
+                  "github_repo", "github_token", "github_branch", "github_path",
+                  "github_login", "github_refresh", "github_expires")]
 
 _COLS = ["id", "name", "description", "key_hash", "key_hint", "archived", "rubric",
-         "judge_key", "judge_model", "judge_base_url", "created_at", "updated_at"]
+         "judge_key", "judge_model", "judge_base_url", "github_repo", "github_token", "github_branch", "github_path",
+         "github_login", "github_refresh", "github_expires", "created_at", "updated_at"]
 _cache: dict[str, Any] = {"at": 0.0, "by_hash": {}}
 CACHE_SECONDS = 10
 
@@ -93,7 +103,11 @@ def public(p: dict[str, Any]) -> dict[str, Any]:
         "archived": bool(p["archived"]), "rubric": p.get("rubric") or "",
         # the judge key itself never leaves the server — only a hint
         "judge_model": p.get("judge_model") or "", "judge_base_url": p.get("judge_base_url") or "",
-        "judge_key_hint": _hint(p.get("judge_key") or "")}
+        "judge_key_hint": _hint(p.get("judge_key") or ""),
+        # the app's source, read when diagnosing issues; the token, like the judge key, stays here
+        "github_repo": p.get("github_repo") or "", "github_branch": p.get("github_branch") or "",
+        "github_path": p.get("github_path") or "", "github_token_hint": _hint(p.get("github_token") or ""),
+        "github_login": p.get("github_login") or ""}
 
 
 def _hint(key: str) -> str:
@@ -111,14 +125,17 @@ async def create(name: str, description: str = "", project_id: str | None = None
         raise ValueError(f"project '{pid}' already exists")
     raw, h, hint = new_key()
     row = {"id": pid, "name": name.strip() or pid, "description": description.strip(), "key_hash": h, "key_hint": hint,
-           "archived": 0, "rubric": "", "judge_key": "", "judge_model": "", "judge_base_url": "", "created_at": _now()}
+           "archived": 0, "rubric": "", "judge_key": "", "judge_model": "", "judge_base_url": "",
+           "github_repo": "", "github_token": "", "github_branch": "", "github_path": "",
+           "github_login": "", "github_refresh": "", "github_expires": "", "created_at": _now()}
     await _write(row)
     return public(row) | {"key": raw}
 
 
 async def update(project_id: str, *, name: str | None = None, description: str | None = None,
                  archived: bool | None = None, rubric: str | None = None, judge_key: str | None = None,
-                 judge_model: str | None = None, judge_base_url: str | None = None) -> dict[str, Any] | None:
+                 judge_model: str | None = None, judge_base_url: str | None = None,
+                 github: dict[str, str | None] | None = None) -> dict[str, Any] | None:
     p = await get(project_id)
     if not p:
         return None
@@ -136,6 +153,11 @@ async def update(project_id: str, *, name: str | None = None, description: str |
         p["judge_model"] = judge_model.strip()
     if judge_base_url is not None:
         p["judge_base_url"] = judge_base_url.strip()
+    for k, v in (github or {}).items():  # github_repo / _token / _branch / _path; "" clears
+        if v is not None:
+            p[k] = v.strip().strip("/") if k != "github_token" else v.strip()
+            if k == "github_token":  # a pasted token (or disconnect) replaces a connected account
+                p.update(github_login="", github_refresh="", github_expires="")
     await _write(p)
     return public(p)
 
@@ -190,3 +212,14 @@ async def with_judge() -> list[str]:
     """Projects that set their own judge key."""
     rows = await query(f"SELECT id FROM {PROJECTS} FINAL WHERE archived = 0 AND judge_key != ''")
     return [r["id"] for r in rows]
+
+
+async def set_github_auth(project_id: str, *, token: str, refresh: str = "", expires: str = "",
+                          login: str = "") -> dict[str, Any] | None:
+    """Save the GitHub account connected with "Connect GitHub" (or a refreshed token)."""
+    p = await get(project_id)
+    if not p:
+        return None
+    p.update(github_token=token, github_refresh=refresh, github_expires=expires, github_login=login or p.get("github_login", ""))
+    await _write(p)
+    return public(p)

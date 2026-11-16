@@ -60,6 +60,35 @@ Applications → Add → Self-hosted**: domain `imagent.<your-domain>`, policy *
 *Emails* (your team's addresses; one-time code by email). Without this step the UI is only
 protected by the read key.
 
+## Connect GitHub (for diagnosing issues)
+
+Issues › Diagnose reads the app's code to find the root cause. To let people connect a repo
+with one click (**Settings › Source code › Connect GitHub**), create a GitHub App once:
+
+1. **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**
+   (or under your organisation's settings, to use it on the org's repos).
+2. Name it (e.g. `imagent-yourteam`), Homepage URL: your imagent URL. Leave Callback URL empty.
+3. Tick **Enable Device Flow**. Untick **Expire user authorization tokens** (or keep it and
+   also set the client secret below). Untick **Webhook → Active**.
+4. **Permissions → Repository → Contents: Read & write** and **Pull requests: Read & write**
+   (Metadata: read-only is added for you). Nothing else. Write is only used by **Create fix branch
+   & draft PR** — it commits to a new `imagent/fix-…` branch and never touches existing ones. For
+   read-only diagnosis, Contents: Read-only is enough.
+5. Create it, then **Install App** on the repos imagent may read.
+6. In `~/imagent-monitor/.env`:
+
+   ```bash
+   IMAGENT_GITHUB_CLIENT_ID=Iv23li…          # "Client ID" on the app's page
+   IMAGENT_GITHUB_APP_SLUG=imagent-yourteam  # from the app's URL; adds a "give access to more repos" link
+   # IMAGENT_GITHUB_CLIENT_SECRET=…          # only if tokens expire (step 3)
+   ```
+
+7. `docker compose up -d imagent`.
+
+Connecting shows a short code to enter on github.com — no callback URL, so it works the same
+behind Cloudflare Access and on localhost. The token stays on the server; imagent writes only
+when someone clicks Create fix branch, and only to a new branch. Without the app, Settings takes a pasted read-only token instead.
+
 ## Operating it
 
 | | |

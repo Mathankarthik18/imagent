@@ -9,6 +9,8 @@ import { AppStateProvider } from "./lib/state";
 import { Compare } from "./pages/Compare";
 import { Dashboard } from "./pages/Dashboard";
 import { ExperimentDetail } from "./pages/ExperimentDetail";
+import { IssueDetail } from "./pages/IssueDetail";
+import { Issues } from "./pages/Issues";
 import { LegacyRedirect, ProjectScope } from "./lib/project";
 import { Blueprint } from "./pages/Blueprint";
 import { ProjectSettings } from "./pages/ProjectSettings";
@@ -47,6 +49,8 @@ createRoot(document.getElementById("root")!).render(
                 <Route path="threads/:threadId" element={<ThreadDetail />} />
                 <Route path="blueprint" element={<Blueprint />} />
                 <Route path="compare" element={<Compare />} />
+                <Route path="issues" element={<Issues />} />
+                <Route path="issues/:issueId" element={<IssueDetail />} />
                 <Route path="experiments" element={<Experiments />} />
                 <Route path="experiments/new" element={<NewExperimentPage />} />
                 <Route path="experiments/:experimentId" element={<ExperimentDetail />} />

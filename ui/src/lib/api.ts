@@ -429,8 +429,32 @@ export interface Project {
   id: string; name: string; description: string; key_hint: string; archived: boolean; created_at: string; updated_at: string;
   rubric?: string;
   judge_model?: string; judge_base_url?: string; judge_key_hint?: string;
+  github_repo?: string; github_branch?: string; github_path?: string; github_token_hint?: string; github_login?: string;
   runs_24h?: number; cost_24h?: number; errors_24h?: number; runs_total?: number; last_trace?: string | null; services?: string[];
 }
 export interface ProjectList { projects: Project[]; unclaimed: { id: string; runs_total: number; last_trace: string | null }[] }
 /** Returned once, on create / rotate. */
 export type ProjectWithKey = Project & { key: string };
+
+export type IssueStatus = "open" | "resolved" | "ignored";
+export type Severity = "high" | "medium" | "low";
+export interface Issue {
+  project: string; id: string; kind: "error" | "loop"; title: string; location: string; agent: string; message: string;
+  runs: number; events: number; failed_runs: number; first_seen: string; last_seen: string; trace_ids: string[];
+  status: IssueStatus; resolved_at: string | null; severity: Severity;
+  diagnosis_status?: "" | DiagnosisStatus; summary?: string; category?: string;
+}
+export type DiagnosisStatus = "running" | "done" | "error";
+export interface FixChange { path: string; diff: string; applies: boolean | null; edits?: { find: string; replace: string }[]; problem?: string }
+export interface FixBranch { branch: string; commit: string; url: string; base: string; pr_number: number; pr_url: string; draft: boolean; at: string }
+export interface DiagnosisResult {
+  title: string; category: string; summary: string; root_cause: string; evidence: string[];
+  fix: { explanation: string; changes: FixChange[] }; verify: string; confidence: "high" | "medium" | "low";
+  focus: { span_id: string; name: string; kind: string } | null;
+  files: { path: string; lines: number[] }[]; repo: { repo: string; branch: string; commit: string } | null;
+  code_error: string; model: string; cost: number; at: string; trace_id?: string; fix_branch?: FixBranch;
+}
+export interface Diagnosis {
+  target: string; status: DiagnosisStatus; error: string; note: string; created_at: string; updated_at: string;
+  result: DiagnosisResult | Record<string, never>;
+}

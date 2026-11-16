@@ -17,6 +17,7 @@ const NAV = [
   { to: "/", label: "Overview", icon: Icon.overview, key: "o" },
   { to: "/blueprint", label: "Blueprint", icon: Icon.blueprint, key: "b" },
   { to: "/traces", label: "Traces", icon: Icon.traces, key: "t" },
+  { to: "/issues", label: "Issues", icon: Icon.issues, key: "i" },
   { to: "/experiments", label: "Experiments", icon: Icon.experiments, key: "e" },
   { to: "/settings", label: "Settings", icon: Icon.settings, key: "s" },
 ];
