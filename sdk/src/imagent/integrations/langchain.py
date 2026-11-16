@@ -43,6 +43,7 @@ class _Run:
     agent_name: str | None
     thread_id: str | None
     started: float
+    user_id: str | None = None
     checkpoint_ns: str | None = None
     first_token_at: float | None = None
 
@@ -205,6 +206,8 @@ class ImagentCallbackHandler(BaseCallbackHandler):
                 kind = "agent"
         thread_id = metadata.get("thread_id") or metadata.get("session_id") or (parent.thread_id if parent else None)
         thread_id = str(thread_id) if thread_id else None
+        user_id = metadata.get("user_id") or (parent.user_id if parent else None)
+        user_id = str(user_id) if user_id else None
         agent_name = parent.agent_name if parent else None
         if kind == "agent":
             agent_name = name if agent_name is None or name not in {"LangGraph", "RunnableSequence"} else agent_name
@@ -221,14 +224,14 @@ class ImagentCallbackHandler(BaseCallbackHandler):
             attrs["imagent.lc.orphan"] = True
         span = tracer.start_span(name, context=ctx, attributes=attrs)
         visible_tags = [t for t in (tags or []) if not t.startswith(("seq:", "graph:", "langsmith:"))]
-        apply_context(span, parent=outer, thread_id=thread_id, agent_name=agent_name, tags=visible_tags,
+        apply_context(span, parent=outer, thread_id=thread_id, user_id=user_id, agent_name=agent_name, tags=visible_tags,
                       metadata=_clean_metadata(metadata) if is_root or kind in {"llm", "agent"} else None)
         if inputs is not None:
             set_content(span, sc.INPUT, inputs)
         ns = metadata.get("langgraph_checkpoint_ns")
         ns = ns if isinstance(ns, str) and ns and kind in {"agent", "node", "chain", "tool"} else None
         run = _Run(span=span, kind=kind, agent_name=agent_name, thread_id=thread_id, started=time.monotonic(),
-                   checkpoint_ns=ns)
+                   checkpoint_ns=ns, user_id=user_id)
         with self._lock:
             self._runs[run_id] = run
             if ns:

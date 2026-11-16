@@ -427,6 +427,7 @@ async def facets(f: Filters) -> dict[str, list[str]]:
             groupUniqArrayIf(200)(model, model != '') AS models,
             groupUniqArrayIf(200)(agent_name, agent_name != '') AS agents,
             groupUniqArrayIf(200)(name, is_root = 1) AS root_names,
+            groupUniqArrayIf(200)(user_id, user_id != '') AS users,
             groupUniqArrayArray(200)(tags) AS tags
         FROM {SPANS} WHERE {where}
     """, params)

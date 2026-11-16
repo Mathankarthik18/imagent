@@ -111,6 +111,7 @@ export function Traces() {
         <Select value={filters.name} onChange={(v) => set({ name: v })} options={facets.data?.root_names ?? []} placeholder="Entry point" />
         <Select value={filters.agent} onChange={(v) => set({ agent: v })} options={facets.data?.agents ?? []} placeholder="Agent" />
         <Select value={filters.model} onChange={(v) => set({ model: v })} options={facets.data?.models ?? []} placeholder="Model" />
+        <Select value={filters.user_id} onChange={(v) => set({ user_id: v })} options={facets.data?.users ?? []} placeholder="User" />
         {(facets.data?.tags.length ?? 0) > 0 && <Select value={filters.tag} onChange={(v) => set({ tag: v })} options={facets.data?.tags ?? []} placeholder="Tag" />}
         {filters.thread_id && (
           <button onClick={() => set({ thread_id: "" })}

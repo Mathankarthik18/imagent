@@ -198,6 +198,7 @@ export interface Facets {
   models: string[];
   agents: string[];
   root_names: string[];
+  users: string[];
   tags: string[];
 }
 

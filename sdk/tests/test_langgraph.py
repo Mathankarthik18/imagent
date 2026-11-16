@@ -256,3 +256,13 @@ def test_subagent_run_inside_a_tool_is_its_own_agent(spans):
     assert sub.attributes[sc.SPAN_KIND] == "agent"
     llm = [s for s in spans.all() if s.attributes.get(sc.SPAN_KIND) == "llm"]
     assert sorted(s.attributes[sc.GEN_AI_AGENT_NAME] for s in llm) == ["main_agent", "main_agent", "noon_agent"]
+
+
+def test_user_id_from_run_metadata(spans):
+    # Apps that set config["metadata"]["user_id"] (as for LangSmith) get it on every span.
+    build_graph().invoke({"messages": [HumanMessage("How fast is ATLAS?")]},
+                         config={"configurable": {"thread_id": "t-u"}, "metadata": {"user_id": "u-meta"}})
+    all_spans = spans.all()
+    assert all_spans
+    for s in all_spans:
+        assert s.attributes.get(sc.USER_ID) == "u-meta", s.name
