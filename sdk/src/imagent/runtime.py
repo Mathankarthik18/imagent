@@ -12,6 +12,7 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -217,11 +218,20 @@ def init(
     return cfg
 
 
+def _under_test() -> bool:
+    return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
+
+
 def init_if_configured(**kwargs: Any) -> ImagentConfig | None:
     """``init()`` only when this process is pointed at an imagent server (IMAGENT_API_KEY or
     IMAGENT_ENDPOINT set, in the environment or ./.env; IMAGENT_ENABLED=false turns it off).
     Lets an app ship the integration everywhere and switch it on per machine."""
-    if (_env("ENABLED", "") or "").strip().lower() in {"0", "false", "no", "off"}:
+    enabled = (_env("ENABLED", "") or "").strip().lower()
+    if enabled in {"0", "false", "no", "off"}:
+        return None
+    if _under_test() and enabled not in {"1", "true", "yes", "on"}:
+        # The app's test suite imports it; its fake runs would show up as production traffic.
+        logger.info("imagent off under pytest — set IMAGENT_ENABLED=true to trace test runs")
         return None
     if not (kwargs.get("api_key") or kwargs.get("endpoint") or _env("API_KEY") or _env("ENDPOINT")):
         logger.info("imagent off — set IMAGENT_ENDPOINT / IMAGENT_API_KEY to send traces")
@@ -274,7 +284,11 @@ def encode_content(obj: Any) -> str | None:
             logger.exception("imagent redactor failed; dropping content")
             return "<redaction failed>"
     if len(s) > cfg.max_content_chars:
-        s = s[: cfg.max_content_chars] + f"…[truncated {len(s) - cfg.max_content_chars} chars]"
+        # Keep the start AND the end: for a model call that's the system prompt plus the latest
+        # messages and tool results — what diagnosing a run needs — instead of losing the tail.
+        head = cfg.max_content_chars * 2 // 5
+        tail = cfg.max_content_chars - head
+        s = f"{s[:head]}…[truncated {len(s) - cfg.max_content_chars} chars]…{s[-tail:]}"
     return s
 
 

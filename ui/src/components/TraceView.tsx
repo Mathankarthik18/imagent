@@ -1,6 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
-import { api, type Span } from "../lib/api";
+import { api, apiPost, ISSUE_KIND, type Feedback, type Signal, type Span } from "../lib/api";
 import { fmtCost, fmtDuration, fmtNum, parseTime } from "../lib/format";
 import { useHotkey } from "../lib/keys";
 import { FlowView, isScope } from "./FlowView";
@@ -85,6 +85,8 @@ export function TraceView({ traceId, selected, onSelect, splitId = "trace", heig
         )}
         {!player.on && stats.llm > 0 && <TryModel traceId={traceId} root={stats.root} span={span} spans={spans} />}
         {!player.on && <DiagnoseRun traceId={traceId} failed={stats.failed > 0} />}
+        {!player.on && <FlagRun traceId={traceId} />}
+        {!player.on && <RunSignals traceId={traceId} onSelect={onSelect} />}
         <span><span className="text-ink">{fmtDuration(stats.duration)}</span> {stats.running ? "so far" : "total"}</span>
         <span><span className="text-ink">{spans.length}</span> spans</span>
         <span><span className="text-ink">{stats.llm}</span> LLM · <span className="text-ink">{stats.tools}</span> tool calls</span>
@@ -118,6 +120,62 @@ export function TraceView({ traceId, selected, onSelect, splitId = "trace", heig
         )} />
       {player.on && <PlayerBar player={player} />}
     </div>
+  );
+}
+
+
+/** What the rule checks found in this run; click one to jump to the step. */
+function RunSignals({ traceId, onSelect }: { traceId: string; onSelect: (spanId: string) => void }) {
+  const q = useQuery({ queryKey: ["signals", traceId], queryFn: () => api<Signal[]>(`/api/traces/${traceId}/signals`) });
+  if (!q.data?.length) return null;
+  // One chip per (category, place), pointing at its biggest step; the count says how many steps.
+  const groups = new Map<string, Signal[]>();
+  for (const s of q.data) groups.set(`${s.category}|${s.location}`, [...(groups.get(`${s.category}|${s.location}`) ?? []), s]);
+  const chips = [...groups.values()];
+  return (
+    <>
+      {chips.slice(0, 3).map((g) => (
+        <button key={g[0].category + g[0].location} onClick={() => onSelect(g[0].span_id)}
+          title={g.map((s) => s.detail).join("\n")}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#eda100]/40 bg-[#eda100]/5 px-2.5 text-[12px] text-ink-2 hover:text-ink">
+          <Icon.warning size={12} className="text-[#eda100]" /> {ISSUE_KIND[g[0].category] ?? g[0].category}
+          <span className="max-w-[140px] truncate font-mono text-ink-3">{g[0].location}</span>
+          {g.length > 1 && <span className="text-ink-3">×{g.length}</span>}
+        </button>
+      ))}
+      {chips.length > 3 && <span className="text-[12px] text-ink-3" title={chips.slice(3).map((g) => `${ISSUE_KIND[g[0].category]} · ${g[0].location}`).join("\n")}>+{chips.length - 3} more</span>}
+    </>
+  );
+}
+
+
+/** "Flag for engine": this run went wrong — the next issue scan investigates it first. */
+function FlagRun({ traceId }: { traceId: string }) {
+  const qc = useQueryClient();
+  const fb = useQuery({ queryKey: ["feedback", traceId], queryFn: () => api<Feedback[]>(`/api/traces/${traceId}/feedback`) });
+  const flag = useMutation({
+    mutationFn: (comment: string) => apiPost<{ id: string }>(`/api/traces/${traceId}/flag`, { comment }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["feedback", traceId] }),
+  });
+  const flagged = (fb.data ?? []).find((f) => f.key === "flag");
+  const negative = (fb.data ?? []).filter((f) => f.key !== "flag" && f.score !== null && f.score < 0.5);
+  return (
+    <>
+      {negative.length > 0 && (
+        <span className="text-critical" title={negative.map((f) => f.comment || "👎").join("\n")}>👎 {negative.length} from users</span>
+      )}
+      {flagged ? (
+        <span className="inline-flex h-7 items-center gap-1.5 text-[12px] text-ink-2" title={flagged.comment || "Flagged for the issue engine"}>
+          <Icon.warning size={12} className="text-[#eda100]" /> Flagged for engine
+        </span>
+      ) : (
+        <button onClick={() => { const c = window.prompt("What went wrong in this run? (optional)"); if (c !== null) flag.mutate(c); }}
+          disabled={flag.isPending} title="Mark this run as wrong — the next issue scan investigates it first"
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-line px-2.5 text-[12px] font-medium text-ink-2 hover:border-line-strong hover:text-ink disabled:opacity-50">
+          <Icon.warning size={12} /> Flag for engine
+        </button>
+      )}
+    </>
   );
 }
 

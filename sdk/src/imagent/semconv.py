@@ -37,3 +37,7 @@ SESSION_ID = "imagent.session_id"
 COST_USD = "imagent.cost_usd"          # provider-reported cost, when available
 TTFT_MS = "imagent.ttft_ms"            # time to first streamed token
 ENVIRONMENT = "deployment.environment"
+
+# Human-in-the-loop: a step paused for a person (the request), and the answer a resumed run got.
+INTERRUPT = "imagent.interrupt"
+RESUME = "imagent.resume"

@@ -430,18 +430,37 @@ export interface Project {
   rubric?: string;
   judge_model?: string; judge_base_url?: string; judge_key_hint?: string;
   github_repo?: string; github_branch?: string; github_path?: string; github_token_hint?: string; github_login?: string;
+  engine?: EngineSettings; overview?: string; preferences?: Preferences;
   runs_24h?: number; cost_24h?: number; errors_24h?: number; runs_total?: number; last_trace?: string | null; services?: string[];
 }
 export interface ProjectList { projects: Project[]; unclaimed: { id: string; runs_total: number; last_trace: string | null }[] }
 /** Returned once, on create / rotate. */
 export type ProjectWithKey = Project & { key: string };
 
-export type IssueStatus = "open" | "resolved" | "ignored";
+export type IssueStatus = "open" | "watching" | "fixing" | "resolved" | "ignored" | "incorrect";
+export const ISSUE_STATUS: Record<IssueStatus, string> = {
+  open: "Open", watching: "Watching", fixing: "Fixing", resolved: "Resolved", ignored: "Ignored", incorrect: "Incorrectly flagged",
+};
+export interface Evidence { trace_id: string; span_id: string; rule: string; detail: string; note: string; start_time: string }
+export type IssueKind = "error" | "loop" | "hallucination" | "task_evasion" | "response_truncation" | "missing_capability"
+  | "feature_gap" | "silent_tool_error" | "wrong_tool" | "incorrect_tool_args" | "failed_error_recovery" | "agent_looping"
+  | "flawed_plan" | "prompt_drift" | "guardrail_bypass" | "pii_leak" | "context_explosion";
+export const ISSUE_KIND: Record<IssueKind, string> = {
+  error: "Error", loop: "Agent looping", hallucination: "Hallucination", task_evasion: "Task evasion",
+  response_truncation: "Response truncation", missing_capability: "Missing capability awareness", feature_gap: "Feature gap",
+  silent_tool_error: "Silent tool error", wrong_tool: "Wrong tool", incorrect_tool_args: "Incorrect tool args",
+  failed_error_recovery: "Failed error recovery", agent_looping: "Agent looping", flawed_plan: "Flawed plan",
+  prompt_drift: "System prompt drift", guardrail_bypass: "Guardrail bypass", pii_leak: "PII leak", context_explosion: "Context explosion",
+};
+/** Issue kinds a model files (and that get a per-issue check). */
+export const AI_ISSUE_KINDS: IssueKind[] = ["hallucination", "task_evasion", "missing_capability", "feature_gap", "silent_tool_error",
+  "wrong_tool", "incorrect_tool_args", "failed_error_recovery", "agent_looping", "flawed_plan", "prompt_drift", "guardrail_bypass", "pii_leak"];
+export interface Signal { span_id: string; category: IssueKind; rule: string; issue_id: string; location: string; value: number; detail: string }
 export type Severity = "high" | "medium" | "low";
 export interface Issue {
-  project: string; id: string; kind: "error" | "loop"; title: string; location: string; agent: string; message: string;
+  project: string; id: string; kind: IssueKind; title: string; location: string; agent: string; message: string;
   runs: number; events: number; failed_runs: number; first_seen: string; last_seen: string; trace_ids: string[];
-  status: IssueStatus; resolved_at: string | null; severity: Severity;
+  status: IssueStatus; resolved_at: string | null; severity: Severity; peak?: number; level?: string; status_reason?: string;
   diagnosis_status?: "" | DiagnosisStatus; summary?: string; category?: string;
 }
 export type DiagnosisStatus = "running" | "done" | "error";
@@ -457,4 +476,30 @@ export interface DiagnosisResult {
 export interface Diagnosis {
   target: string; status: DiagnosisStatus; error: string; note: string; created_at: string; updated_at: string;
   result: DiagnosisResult | Record<string, never>;
+}
+
+export interface EngineSettings {
+  enabled: boolean; categories: string[]; screener_model: string; investigator_model: string;
+  level: "reduced" | "standard" | "expanded"; monthly_cap_usd: number; guarded_tools: string[];
+  context_tokens_limit: number; tool_output_chars_limit: number;
+}
+export interface EngineCategory { label: string; group: string; how: "model" | "rule" | "rule+model"; definition: string }
+export interface Feedback {
+  id: string; trace_id: string; thread_id: string; score: number | null; comment: string; key: string; source: string;
+  user_id: string; created_at: string;
+}
+
+export interface Preferences {
+  categories: Record<string, { priority: "high" | "medium" | "low"; why: string }>;
+  rules: string[]; learned_at: string; pending: unknown[];
+}
+
+export interface IssueCheck {
+  status: "writing" | "active" | "draft" | "off" | "failed"; instructions?: string; caught?: number; evidence?: number;
+  passed?: number; clean?: number; model?: string; cost?: number; created_at?: string;
+}
+export interface RegressionExample { trace_id: string; request: string; claims: string[] }
+export interface FixVerification {
+  experiment_id: string; status: "running" | "done"; updated_at: string;
+  results: { source: string; replay?: string; result: "pass" | "fail" | "skip" | "error"; reason: string }[];
 }

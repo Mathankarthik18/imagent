@@ -80,7 +80,7 @@ def test_truncation(spans):
     out = spans.all() or None
     big()
     out = spans.all()[0].attributes[sc.OUTPUT]
-    assert out.startswith("x" * 50) and "truncated 450 chars" in out
+    assert out.startswith("x" * 20) and "truncated 450 chars" in out and out.endswith("x" * 30)
 
 
 def test_noop_when_not_initialised():

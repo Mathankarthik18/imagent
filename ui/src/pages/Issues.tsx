@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useRef } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Icon } from "../components/icons";
 import { Time } from "../components/Time";
 import { Empty, ErrorBox, framedTable, PageHeader, Segmented, Spinner, th } from "../components/ui";
-import { api, apiPost, type Issue, type IssueStatus, type Severity } from "../lib/api";
+import { api, apiPost, ISSUE_KIND, ISSUE_STATUS, type Issue, type IssueKind, type Severity } from "../lib/api";
 import { pp } from "../lib/project";
 import { useAppState } from "../lib/state";
 
@@ -18,39 +19,77 @@ export function Issues() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
-  const status = (params.get("status") as IssueStatus) || "open";
+  const status = params.get("status") || "open";
+  const kind = params.get("kind") ?? "";
+  const setParam = (k: string, v: string) => { const n = new URLSearchParams(params); if (v) n.set(k, v); else n.delete(k); setParams(n); };
   const issues = useQuery({
     queryKey: ["issues", project, status],
     queryFn: () => api<Issue[]>("/api/issues", { project, status }),
     refetchInterval: (q) => ((q.state.data ?? []).some((i) => i.diagnosis_status === "running") ? 4000 : 30000),
   });
+  const engine = useQuery({
+    queryKey: ["engine-status", project],
+    queryFn: () => api<{ screening: boolean; to_investigate: number; screened_7d: number; flagged_7d: number; month_spend: number; monthly_cap: number; enabled: boolean }>("/api/engine/status", { project }),
+    refetchInterval: (q) => (q.state.data?.screening ? 4000 : 60000),
+  });
+  const wasScreening = useRef(false);
+  useEffect(() => {  // screening finished: its findings are on the board now
+    if (wasScreening.current && engine.data && !engine.data.screening) qc.invalidateQueries({ queryKey: ["issues", project] });
+    wasScreening.current = !!engine.data?.screening;
+  }, [engine.data, project, qc]);
   const scan = useMutation({
     mutationFn: () => apiPost<{ issues: number; new: number; diagnosing: number }>(`/api/issues/scan?project=${encodeURIComponent(project)}`, {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["issues", project] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["issues", project] }); qc.invalidateQueries({ queryKey: ["engine-status", project] }); },
   });
 
   return (
     <>
       <PageHeader title="Issues" meta="What keeps going wrong in production runs, and why — checked every few hours">
-        <Segmented value={status} onChange={(v) => setParams(v === "open" ? {} : { status: v })}
-          options={[{ id: "open", label: "Open" }, { id: "resolved", label: "Resolved" }, { id: "ignored", label: "Ignored" }]} />
+        <Segmented value={status} onChange={(v) => setParam("status", v === "open" ? "" : v)}
+          options={[{ id: "open", label: "Open" }, { id: "resolved", label: "Resolved" }, { id: "dismissed", label: "Dismissed" }]} />
         <button onClick={() => scan.mutate()} disabled={scan.isPending}
           className="inline-flex h-7 items-center gap-1.5 rounded-md bg-ink px-3 text-[12.5px] font-medium text-bg disabled:opacity-50">
           <Icon.refresh size={12} className={scan.isPending ? "animate-spin" : ""} /> {scan.isPending ? "Scanning…" : "Scan now"}
         </button>
       </PageHeader>
 
-      {scan.data && (
-        <div className="mb-3 text-[12.5px] text-ink-3">
-          Scanned the last 7 days: {scan.data.issues} issue{scan.data.issues === 1 ? "" : "s"}, {scan.data.new} new
-          {scan.data.diagnosing ? ` · diagnosing the top ${scan.data.diagnosing}` : ""}.
+      {engine.data && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-ink-3">
+          {!engine.data.enabled ? (
+            <span>The issue engine is off — <Link to={pp("/settings?s=engine")} className="text-accent hover:underline">turn it on</Link> to read runs for silent failures.</span>
+          ) : engine.data.screening ? (
+            <span className="inline-flex items-center gap-2 text-accent">
+              <span className="size-3 animate-spin rounded-full border-2 border-line border-t-accent" />
+              {engine.data.to_investigate ? `Investigating ${engine.data.to_investigate} flagged run${engine.data.to_investigate === 1 ? "" : "s"}…` : "Reading new runs for silent failures…"}
+            </span>
+          ) : (
+            <span>Read <span className="text-ink-2">{engine.data.screened_7d}</span> runs in the last 7 days · <span className="text-ink-2">{engine.data.flagged_7d}</span> flagged</span>
+          )}
+          <span title="Issue engine model spend this month vs the cap (Settings › Issue engine)">
+            ${engine.data.month_spend.toFixed(2)} of ${engine.data.monthly_cap.toFixed(0)} this month
+          </span>
+          {scan.data && <span>Last scan: {scan.data.issues} issue{scan.data.issues === 1 ? "" : "s"}, {scan.data.new} new</span>}
         </div>
       )}
       {scan.isError && <div className="mb-3"><ErrorBox error={scan.error} /></div>}
 
+      {(issues.data ?? []).length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {["", ...new Set((issues.data ?? []).map((i) => i.kind))].map((k) => {
+            const n = (issues.data ?? []).filter((i) => !k || i.kind === k).length;
+            return (
+              <button key={k || "all"} onClick={() => setParam("kind", k)}
+                className={`h-7 rounded-full border px-3 text-[12px] ${kind === k ? "border-ink/40 bg-subtle font-medium text-ink" : "border-line text-ink-2 hover:border-line-strong hover:text-ink"}`}>
+                {k ? ISSUE_KIND[k as IssueKind] ?? k : "All"} <span className="text-ink-3">{n}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {issues.isError ? <ErrorBox error={issues.error} /> : issues.isPending ? <Spinner /> : (issues.data ?? []).length === 0 ? (
         <Empty title={status === "open" ? "No open issues" : `No ${status} issues`}
-          hint={status === "open" ? <>Failed steps and runaway tool loops from the last 7 days show up here, grouped by cause.
+          hint={status === "open" ? <>Failed steps, runaway loops, context explosions and actions run without approval from the last 7 days show up here, grouped by cause.
             Open any one to see the root cause and a suggested fix.</> : undefined}
           action={status === "open" ? <button onClick={() => scan.mutate()} className="text-accent hover:underline">Scan now</button> : undefined} />
       ) : (
@@ -66,7 +105,7 @@ export function Issues() {
               </tr>
             </thead>
             <tbody>
-              {(issues.data ?? []).map((i) => <IssueRow key={i.id} i={i} onOpen={() => navigate(pp(`/issues/${i.id}`))} />)}
+              {(issues.data ?? []).filter((i) => !kind || i.kind === kind).map((i) => <IssueRow key={i.id} i={i} onOpen={() => navigate(pp(`/issues/${i.id}`))} />)}
             </tbody>
           </table>
         </div>
@@ -84,9 +123,14 @@ function IssueRow({ i, onOpen }: { i: Issue; onOpen: () => void }) {
         <span className="inline-flex items-center gap-1.5 text-ink-2"><span className={`size-2 rounded-full ${sev.dot}`} />{sev.label}</span>
       </td>
       <td className={`${cell} max-w-0 w-[48%]`}>
-        <div className="truncate font-medium text-ink">{i.title}</div>
+        <div className="flex items-center gap-2">
+          <span className="truncate font-medium text-ink">{i.title}</span>
+          {(i.status === "watching" || i.status === "fixing" || i.status === "incorrect") && (
+            <span className="shrink-0 rounded bg-subtle px-1.5 text-[11px] text-ink-2">{ISSUE_STATUS[i.status]}</span>
+          )}
+        </div>
         <div className="truncate text-[12px] text-ink-3">
-          {i.kind === "loop" ? "Loop" : "Error"} in <span className="font-mono">{i.location}</span>
+          <span className="text-ink-2">{ISSUE_KIND[i.kind] ?? i.kind}</span> · <span className="font-mono">{i.location}</span>
           {i.agent && i.agent !== i.location && <> · <span className="font-mono">{i.agent}</span></>}
         </div>
       </td>

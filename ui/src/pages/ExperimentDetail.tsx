@@ -167,7 +167,7 @@ export function ExperimentDetail() {
         <div className="rounded-lg border border-line px-3.5 py-2 text-[12.5px]">
           <span className="font-medium">AI judge is off</span>
           <span className="text-ink-3"> — the original isn't necessarily right, so a judge model compares the answers for quality.
-            {" "}<Link to={pp("/settings")} className="text-accent hover:underline">Add a judge key in Settings</Link>. Meanwhile, open a replay and mark which answer is better yourself.</span>
+            {" "}<Link to={pp("/settings?s=model")} className="text-accent hover:underline">Add a model key in Settings</Link>. Meanwhile, open a replay and mark which answer is better yourself.</span>
         </div>
       )}
 

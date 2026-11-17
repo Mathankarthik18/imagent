@@ -182,3 +182,13 @@ def test_app_frames_skip_libraries():
     st = ('  File "/x/.venv/lib/python3.13/site-packages/langchain_core/tools/base.py", line 1, in run\n'
           '  File "/Users/me/bosun/app/tools/master_report_tools.py", line 218, in master_report_coverage_tool\n')
     assert d.app_frames([st]) == ["/Users/me/bosun/app/tools/master_report_tools.py"]
+
+
+def test_final_answer_is_the_last_model_message():
+    spans = [
+        {"span_id": "r", "kind": "agent", "start_time": T0, "output": '{"messages": [{"role": "user", "content": "q"}, …cut'},
+        {"span_id": "m1", "kind": "llm", "start_time": T0, "end_time": T0, "output": '{"role": "assistant", "content": "", "tool_calls": []}'},
+        {"span_id": "m2", "kind": "llm", "start_time": T0, "end_time": T0 + dt.timedelta(seconds=5),
+         "output": '{"role": "assistant", "content": "Fleet report: 19 vessels"}'},
+    ]
+    assert d.final_answer(spans, spans[0]) == "Fleet report: 19 vessels"

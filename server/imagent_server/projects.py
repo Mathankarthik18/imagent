@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 import re
 import secrets
 import time
 from typing import Any
 
+from . import engine, learning
 from .db import DB, SPANS, get_client, query
 
 PROJECTS = f"{DB}.projects"
@@ -48,6 +50,9 @@ DDL = [
         github_login String DEFAULT '',
         github_refresh String DEFAULT '',
         github_expires String DEFAULT '',
+        engine       String DEFAULT '',
+        overview     String DEFAULT '',
+        preferences  String DEFAULT '',
         created_at   DateTime64(3, 'UTC'),
         updated_at   DateTime64(3, 'UTC') DEFAULT now64(3)
     ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY id
@@ -57,11 +62,12 @@ DDL = [
 DDL += [f"ALTER TABLE {PROJECTS} ADD COLUMN IF NOT EXISTS {c} String DEFAULT ''"
         for c in ("rubric", "judge_key", "judge_model", "judge_base_url",
                   "github_repo", "github_token", "github_branch", "github_path",
-                  "github_login", "github_refresh", "github_expires")]
+                  "github_login", "github_refresh", "github_expires", "engine", "overview", "preferences")]
 
 _COLS = ["id", "name", "description", "key_hash", "key_hint", "archived", "rubric",
          "judge_key", "judge_model", "judge_base_url", "github_repo", "github_token", "github_branch", "github_path",
-         "github_login", "github_refresh", "github_expires", "created_at", "updated_at"]
+         "github_login", "github_refresh", "github_expires", "engine", "overview", "preferences",
+         "created_at", "updated_at"]
 _cache: dict[str, Any] = {"at": 0.0, "by_hash": {}}
 CACHE_SECONDS = 10
 
@@ -107,7 +113,9 @@ def public(p: dict[str, Any]) -> dict[str, Any]:
         # the app's source, read when diagnosing issues; the token, like the judge key, stays here
         "github_repo": p.get("github_repo") or "", "github_branch": p.get("github_branch") or "",
         "github_path": p.get("github_path") or "", "github_token_hint": _hint(p.get("github_token") or ""),
-        "github_login": p.get("github_login") or ""}
+        "github_login": p.get("github_login") or "",
+        "engine": engine.settings(p), "overview": p.get("overview") or "",
+        "preferences": learning.preferences(p)}
 
 
 def _hint(key: str) -> str:
@@ -127,7 +135,8 @@ async def create(name: str, description: str = "", project_id: str | None = None
     row = {"id": pid, "name": name.strip() or pid, "description": description.strip(), "key_hash": h, "key_hint": hint,
            "archived": 0, "rubric": "", "judge_key": "", "judge_model": "", "judge_base_url": "",
            "github_repo": "", "github_token": "", "github_branch": "", "github_path": "",
-           "github_login": "", "github_refresh": "", "github_expires": "", "created_at": _now()}
+           "github_login": "", "github_refresh": "", "github_expires": "", "engine": "", "overview": "", "preferences": "",
+           "created_at": _now()}
     await _write(row)
     return public(row) | {"key": raw}
 
@@ -135,7 +144,8 @@ async def create(name: str, description: str = "", project_id: str | None = None
 async def update(project_id: str, *, name: str | None = None, description: str | None = None,
                  archived: bool | None = None, rubric: str | None = None, judge_key: str | None = None,
                  judge_model: str | None = None, judge_base_url: str | None = None,
-                 github: dict[str, str | None] | None = None) -> dict[str, Any] | None:
+                 github: dict[str, str | None] | None = None, engine_patch: dict[str, Any] | None = None,
+                 overview: str | None = None, preferences: str | None = None) -> dict[str, Any] | None:
     p = await get(project_id)
     if not p:
         return None
@@ -153,6 +163,12 @@ async def update(project_id: str, *, name: str | None = None, description: str |
         p["judge_model"] = judge_model.strip()
     if judge_base_url is not None:
         p["judge_base_url"] = judge_base_url.strip()
+    if engine_patch:
+        p["engine"] = json.dumps(engine.clean(engine_patch, engine.settings(p)))
+    if overview is not None:
+        p["overview"] = overview.strip()[:20000]
+    if preferences is not None:  # JSON, from learning or edited in Settings
+        p["preferences"] = preferences
     for k, v in (github or {}).items():  # github_repo / _token / _branch / _path; "" clears
         if v is not None:
             p[k] = v.strip().strip("/") if k != "github_token" else v.strip()

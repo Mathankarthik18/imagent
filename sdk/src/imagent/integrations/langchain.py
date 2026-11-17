@@ -21,7 +21,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Span
 
 from .. import semconv as sc
-from ..runtime import apply_context, get_tracer, is_imagent_span, record_error, set_content
+from ..runtime import apply_context, encode_content, get_tracer, is_imagent_span, record_error, set_content
 from ..serialize import message_to_dict, to_jsonable
 
 # LangGraph control-flow exceptions — not failures.
@@ -46,6 +46,25 @@ class _Run:
     user_id: str | None = None
     checkpoint_ns: str | None = None
     first_token_at: float | None = None
+
+
+def _interrupt_value(error: BaseException) -> str:
+    """What the run paused on: the interrupt payload(s) LangGraph raised (e.g. a HITL request)."""
+    vals = []
+    for it in (error.args[0] if error.args and isinstance(error.args[0], (list, tuple)) else []):
+        vals.append(getattr(it, "value", it))
+    try:
+        return encode_content(vals or str(error)) or "paused"
+    except Exception:  # noqa: BLE001
+        return str(error)[:2000]
+
+
+def _resume_value(inputs: Any) -> str | None:
+    """A ``Command(resume=...)`` input — the answer given to an interrupt."""
+    if type(inputs).__name__ != "Command":
+        return None
+    resume = getattr(inputs, "resume", None)
+    return None if resume is None else (encode_content(resume) or "resumed")
 
 
 _RECENT_RUNS = 4096  # ended runs kept so late children can still find their parent
@@ -263,6 +282,9 @@ class ImagentCallbackHandler(BaseCallbackHandler):
         if error is not None:
             if type(error).__name__ in _CONTROL_FLOW_ERRORS:
                 span.add_event("interrupt", {"type": type(error).__name__, "message": str(error)[:1000]})
+                if type(error).__name__ in {"GraphInterrupt", "NodeInterrupt", "Interrupt"}:
+                    # paused for a person (human-in-the-loop approval): queryable, not an error
+                    span.set_attribute(sc.INTERRUPT, _interrupt_value(error))
             else:
                 record_error(span, error)
         elif outputs is not None:
@@ -291,6 +313,9 @@ class ImagentCallbackHandler(BaseCallbackHandler):
         else:
             kind = "chain"
         attrs: dict[str, Any] = {}
+        resume = _resume_value(inputs)
+        if resume is not None:  # a run continuing after a pause: what the person decided
+            attrs[sc.RESUME] = resume
         if "langgraph_step" in md:
             attrs["langgraph.step"] = md["langgraph_step"]
         if "langgraph_node" in md:

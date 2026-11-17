@@ -27,7 +27,7 @@ import os
 import re
 from typing import Any
 
-from . import compare, github, judge, queries
+from . import compare, github, judge, queries, rules
 from .db import DB, SPANS, get_client, query
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,9 @@ DDL = [
         updated_at     DateTime64(3, 'UTC') DEFAULT now64(3)
     ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (project, id)
     """,
+    f"ALTER TABLE {ISSUES} ADD COLUMN IF NOT EXISTS peak Float64 DEFAULT 0",  # worst case ÷ the limit
+    f"ALTER TABLE {ISSUES} ADD COLUMN IF NOT EXISTS level String DEFAULT ''",  # severity set by the investigator or a person
+    f"ALTER TABLE {ISSUES} ADD COLUMN IF NOT EXISTS status_reason String DEFAULT ''",
     # One diagnosis per target: an issue ("issue:<id>") or a single run ("trace:<trace_id>").
     f"""
     CREATE TABLE IF NOT EXISTS {DIAGNOSES} (
@@ -72,7 +75,11 @@ DDL = [
 ]
 
 _ISSUE_COLS = ["project", "id", "kind", "title", "location", "agent", "message", "runs", "events", "failed_runs",
-               "first_seen", "last_seen", "trace_ids", "status", "resolved_at"]
+               "first_seen", "last_seen", "trace_ids", "status", "resolved_at", "peak", "level", "status_reason"]
+STALE_DAYS = int(os.getenv("IMAGENT_STALE_DAYS", "14"))  # open issues not seen this long close themselves
+# Board views → statuses. Watching: kept open and monitored; fixing: a fix PR is open;
+# incorrect: "incorrectly flagged" — not a real problem (the engine learns from it).
+STATUS_VIEWS = {"open": ("open", "watching", "fixing"), "resolved": ("resolved",), "dismissed": ("ignored", "incorrect")}
 _DIAG_COLS = ["target", "project", "status", "result", "error", "note", "created_at"]
 
 WINDOW_DAYS = 7
@@ -165,6 +172,7 @@ async def detect(project: str, days: int = WINDOW_DAYS) -> list[dict[str, Any]]:
             "location": e["location"], "agent": e["agent"] or "", "message": msg[:2000],
             "runs": e["runs"], "events": e["events"], "failed_runs": e["failed_runs"],
             "first_seen": e["first_seen"], "last_seen": e["last_seen"], "trace_ids": [t[0] for t in e["recent"]],
+            "peak": 0.0,
         })
     for lp in loops:
         out.append({
@@ -173,11 +181,18 @@ async def detect(project: str, days: int = WINDOW_DAYS) -> list[dict[str, Any]]:
             "location": lp["location"], "agent": lp["agent"] or "", "message": "",
             "runs": lp["runs"], "events": lp["events"], "failed_runs": 0,
             "first_seen": lp["first_seen"], "last_seen": lp["last_seen"], "trace_ids": [t[0] for t in lp["recent"]],
+            "peak": lp["worst"] / LOOP_MIN_CALLS,
         })
     return out
 
 
 def severity(i: dict[str, Any]) -> str:
+    if i.get("level") in ("high", "medium", "low"):
+        return i["level"]
+    from . import rules
+    ruled = rules.severity(i)
+    if ruled:
+        return ruled
     if i["kind"] == "error" and (i["failed_runs"] >= 3 or i["runs"] >= 20):
         return "high"
     if i["runs"] >= 5 or i["failed_runs"] >= 1:
@@ -204,20 +219,26 @@ def _ts(v: Any) -> dt.datetime:
 
 
 def merge(found: list[dict[str, Any]], existing: dict[str, dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
-    """Rows to write, and ids of issues that are new (or came back after being resolved)."""
+    """Rows to write, and ids of issues that are new (or came back after being resolved).
+    A person's choices stick: ignored / incorrectly flagged / watching / fixing stay as they are."""
     rows, fresh = [], []
     for f in found:
         old = existing.get(f["id"])
         status, resolved_at = "open", None
+        f.setdefault("level", "")
+        f.setdefault("status_reason", "")
         if old:
             status, resolved_at = old["status"], old.get("resolved_at")
+            f["level"] = old.get("level") or f["level"]
+            f["status_reason"] = old.get("status_reason") or ""
             first = min(_ts(old["first_seen"]), _ts(f["first_seen"]))
             f["first_seen"] = first
             if status == "resolved" and resolved_at and _ts(f["last_seen"]) > _ts(resolved_at):
                 status, resolved_at = "open", None  # it happened again after the fix
+                f["status_reason"] = "Re-opened: it happened again after being resolved"
                 fresh.append(f["id"])
             unchanged = (old["runs"] == f["runs"] and _ts(old["last_seen"]) == _ts(f["last_seen"])
-                         and old["status"] == status)
+                         and old["status"] == status and round(old.get("peak") or 0, 3) == round(f.get("peak") or 0, 3))
             if unchanged:
                 continue
         else:
@@ -226,53 +247,101 @@ def merge(found: list[dict[str, Any]], existing: dict[str, dict[str, Any]]) -> t
     return rows, fresh
 
 
-async def scan(project: str, *, days: int = WINDOW_DAYS, auto_diagnose: int = AUTO_DIAGNOSE) -> dict[str, Any]:
+async def scan(project: str, *, days: int = WINDOW_DAYS, auto_diagnose: int = AUTO_DIAGNOSE,
+               screen: bool = True) -> dict[str, Any]:
+    """Errors, loops and rule findings now; AI screening of new runs starts in the background and
+    re-scans when it has flagged something (``screen=False`` on that pass)."""
+    from . import engine, learning, projects, rules, screener
+    proj = await projects.get(project)
+    if proj:
+        res = await learning.learn(project, proj)  # what people did since the last scan
+        if res.get("learned"):
+            logger.info("learned for %s: %s", project, res)
+            proj = await projects.get(project)
+    es = engine.settings(proj)
     found = await detect(project, days)
-    rows, fresh = merge(found, await _issues(project))
+    ruled, rule_status = await rules.detect(project, days, es)
+    found += ruled
+    if es["enabled"]:
+        from . import investigator
+        found += await investigator.ai_issues(project, days)
+    if screen and es["enabled"] and proj:
+        rule_status["screening"] = "started" if screener.start(project, proj, es, days) else "already running"
+    existing = await _issues(project)
+    rows, fresh = merge(found, existing)
+    rows += stale(existing, {r["id"] for r in rows})
     await _write_issues(rows)
     started = 0
     if auto_diagnose and fresh:
-        from . import projects
-        proj = await projects.get(project)
         if judge.config_for(proj):
             ranked = sorted((f for f in found if f["id"] in fresh), key=lambda i: (severity(i) != "high", -i["runs"]))
             for i in ranked[:auto_diagnose]:
                 if await start(f"issue:{i['id']}", project):
                     started += 1
-    return {"issues": len(found), "updated": len(rows), "new": len(fresh), "diagnosing": started}
+    return {"issues": len(found), "updated": len(rows), "new": len(fresh), "diagnosing": started, **rule_status}
+
+
+def stale(existing: dict[str, dict[str, Any]], touched: set[str]) -> list[dict[str, Any]]:
+    """Open issues not seen for STALE_DAYS: close them (they re-open if it happens again)."""
+    cutoff = _now() - dt.timedelta(days=STALE_DAYS)
+    out = []
+    for i in existing.values():
+        if i["id"] not in touched and i["status"] == "open" and _ts(i["last_seen"]) < cutoff:
+            out.append(i | {"status": "resolved", "resolved_at": _now(),
+                            "status_reason": f"Closed automatically: not seen for {STALE_DAYS} days"})
+    return out
 
 
 async def list_issues(project: str, status: str = "open") -> list[dict[str, Any]]:
-    where = "" if status == "all" else "AND status = {s:String}"
+    statuses = STATUS_VIEWS.get(status, (status,))
+    where = "" if status == "all" else "AND status IN {s:Array(String)}"
     rows = await query(f"""
         SELECT * FROM {ISSUES} FINAL WHERE project = {{p:String}} {where}
-        ORDER BY last_seen DESC LIMIT 500""", {"p": project, "s": status})
+        ORDER BY last_seen DESC LIMIT 500""", {"p": project, "s": list(statuses)})
     diags = await query(f"""
         SELECT target, status, result FROM {DIAGNOSES} FINAL
         WHERE project = {{p:String}} AND startsWith(target, 'issue:')""", {"p": project})
     by = {d["target"][6:]: d for d in diags}
+    prefs = await _prefs(project)
     out = []
     for r in rows:
         d = by.get(r["id"])
         res = _load(d["result"]) if d and d["status"] == "done" else {}
-        out.append(r | {"severity": severity(r), "diagnosis_status": d["status"] if d else "",
+        out.append(r | {"severity": _sev(r, prefs), "diagnosis_status": d["status"] if d else "",
                         "summary": res.get("summary", ""), "category": res.get("category", "")})
     order = {"high": 0, "medium": 1, "low": 2}
     out.sort(key=lambda i: (order[i["severity"]], -_ts(i["last_seen"]).timestamp()))
     return out
 
 
+async def _prefs(project: str) -> dict[str, Any]:
+    from . import learning, projects
+    return learning.preferences(await projects.get(project))
+
+
+def _sev(i: dict[str, Any], prefs: dict[str, Any]) -> str:
+    """Severity: a level set on the issue wins; otherwise computed, capped at the category's learned priority."""
+    from . import learning
+    if i.get("level") in ("high", "medium", "low"):
+        return i["level"]
+    return learning.cap(prefs, i["kind"], severity(i))
+
+
 async def get_issue(issue: str) -> dict[str, Any] | None:
     rows = await query(f"SELECT * FROM {ISSUES} FINAL WHERE id = {{id:String}}", {"id": issue})
-    return rows[0] | {"severity": severity(rows[0])} if rows else None
+    return rows[0] | {"severity": _sev(rows[0], await _prefs(rows[0]["project"]))} if rows else None
 
 
-async def set_status(issue: str, status: str) -> dict[str, Any] | None:
+async def set_status(issue: str, status: str, reason: str = "", level: str | None = None) -> dict[str, Any] | None:
     i = await get_issue(issue)
     if not i:
         return None
-    i["status"] = status
-    i["resolved_at"] = _now() if status == "resolved" else None
+    if level is not None:  # a person sets the severity
+        i["level"] = level
+    if status:
+        i["status"] = status
+        i["resolved_at"] = _now() if status == "resolved" else None
+        i["status_reason"] = reason.strip()[:1000]
     await _write_issues([i])
     return i | {"severity": severity(i)}
 
@@ -336,8 +405,9 @@ async def _run(target: str, project: str, note: str, created: dt.datetime) -> No
             if not issue or not issue["trace_ids"]:
                 raise RuntimeError("this issue has no example runs left (they may have aged out)")
             trace_id = issue["trace_ids"][0]
+            focus_id = await rules.focus_for(issue["id"], trace_id)  # rule issues point at one step
         else:
-            trace_id = ident
+            trace_id, focus_id = ident, None
         spans = await queries.get_trace(trace_id)
         if not spans:
             raise RuntimeError(f"run {trace_id} not found")
@@ -347,7 +417,7 @@ async def _run(target: str, project: str, note: str, created: dt.datetime) -> No
             gh, gh_error = None, str(exc)
         else:
             gh_error = ""
-        result = await diagnose(spans, cfg=cfg, gh=gh, issue=issue, note=note,
+        result = await diagnose(spans, cfg=cfg, gh=gh, issue=issue, note=note, span_id=focus_id,
                                 rubric=(proj or {}).get("rubric", ""))
         if gh_error and not result.get("code_error"):
             result["code_error"] = f"Couldn't read the repo: {gh_error}"[:300]
@@ -500,11 +570,30 @@ Reply with JSON only:
   "confidence": "high" | "medium" | "low"}}"""
 
 
+def final_answer(spans: list[dict[str, Any]], root: dict[str, Any]) -> str:
+    """What the agent finally said: the last model message with text in the run (a run's own
+    output can be cut short or be a whole state object), else the run's output."""
+    from .screener import json_string_at
+    llms = sorted((s for s in spans if s.get("kind") == "llm"), key=lambda s: compare._ts(s.get("end_time") or s["start_time"]),
+                  reverse=True)
+    main = [s for s in llms if root.get("agent_name") and s.get("agent_name") == root.get("agent_name")]
+    for s in main or llms:  # the main agent's last message, not a sub-agent's
+        out = s.get("output") or ""
+        text = json_string_at(out, "content") if out.lstrip().startswith("{") else out
+        if text.strip():
+            return text
+    return compare.readable(root.get("output", ""))
+
+
 def _run_context(spans: list[dict[str, Any]], focus: dict[str, Any] | None, issue: dict[str, Any] | None,
                  note: str) -> str:
     root = compare.agent_span(spans) or {}
     parts = []
     if issue:
+        from .engine import CATEGORIES
+        cat = CATEGORIES.get(issue["kind"])
+        if cat:
+            parts.append(f"## Problem category: {cat['label']}\n{cat['definition']}\nFound by a rule check: {issue.get('message', '')}")
         parts.append(f"## Issue\n{issue['title']}\nKind: {issue['kind']} · in {issue['location']}"
                      f"{' (agent ' + issue['agent'] + ')' if issue['agent'] else ''} · {issue['runs']} runs affected, "
                      f"{issue['failed_runs']} ended in failure, {issue['events']} occurrences, "
@@ -523,7 +612,7 @@ def _run_context(spans: list[dict[str, Any]], focus: dict[str, Any] | None, issu
             sample = "\n".join(f"- in: {_clip(s.get('input', ''), 300)}\n  out: {_clip(s.get('output', ''), 300)}"
                                for s in calls[:6])
             parts.append(f"## Repeated calls to {issue['location']} ({len(calls)} in this run), first few\n{sample}")
-    answer = compare.readable(root.get("output", ""))
+    answer = final_answer(spans, root)
     parts.append(f"## Final answer\n{_clip(answer, 2500) or '(none — the run failed or was cut off)'}")
     stacks = stacktraces(spans)
     if stacks:
@@ -751,6 +840,11 @@ async def create_fix(target: str) -> dict[str, Any]:
     out = made | {"base": base, "pr_number": pr["number"], "pr_url": pr["url"], "draft": pr["draft"], "at": _now().isoformat()}
     await _save(target, d["project"], "done", result=r | {"fix_branch": out}, note=d["note"],
                 created_at=d["created_at"])
+    if issue:
+        from . import learning
+        await learning.log(issue, "pr_opened", pr["url"])
+        if issue["status"] == "open":
+            await set_status(issue["id"], "fixing", f"Fix PR #{pr['number']} opened: {pr['url']}")
     return out
 
 

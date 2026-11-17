@@ -107,6 +107,7 @@ def test_init_if_configured_only_connects_when_pointed_at_a_server(monkeypatch, 
         monkeypatch.delenv(k, raising=False)
     calls = []
     monkeypatch.setattr(runtime, "init", lambda **kw: calls.append(kw) or "cfg")
+    monkeypatch.setattr(runtime, "_under_test", lambda: False)
     assert runtime.init_if_configured() is None and calls == []
     monkeypatch.setenv("IMAGENT_ENDPOINT", "http://imagent.local:8300")
     assert runtime.init_if_configured() == "cfg"
@@ -141,3 +142,14 @@ def test_blueprint_follows_the_app_when_its_agents_change():
     assert roots[2]["model"]["name"] == "m2"                           # model change → sent
     assert {s["name"] for s in roots[2]["subagents"]} == {"noon", "claims"}   # claims kept: another request builds it
     assert "claims" in b._sub_names                                    # its own runs don't become a separate app
+
+
+def test_init_if_configured_stays_off_in_an_apps_test_suite(monkeypatch):
+    from imagent import runtime
+
+    monkeypatch.setattr(runtime, "init", lambda **kw: "cfg")
+    monkeypatch.setenv("IMAGENT_API_KEY", "imk_x")
+    monkeypatch.delenv("IMAGENT_ENABLED", raising=False)
+    assert runtime.init_if_configured() is None          # we are under pytest
+    monkeypatch.setenv("IMAGENT_ENABLED", "true")
+    assert runtime.init_if_configured() == "cfg"

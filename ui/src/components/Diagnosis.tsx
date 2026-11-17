@@ -34,7 +34,7 @@ export function DiagnosisPanel({ diagnosis, startPath, queryKey, compact = false
     return (
       <div className="rounded-lg border border-line px-4 py-3 text-[12.5px] text-ink-2">
         Diagnosis uses this project's model. Add an API key under{" "}
-        <Link to={pp("/settings")} className="text-accent hover:underline">Settings › Judging</Link> first.
+        <Link to={pp("/settings?s=model")} className="text-accent hover:underline">Settings › AI model</Link> first.
       </div>
     );
   }
@@ -120,7 +120,7 @@ function DiagnosisView({ r, note, onAgain, compact, fixPath, queryKey }: {
         {r.repo && r.fix.changes.some((c) => c.edits?.length) && <CreateFix r={r} fixPath={fixPath} queryKey={queryKey} onAgain={onAgain} />}
         {!r.repo && !r.code_error && (
           <p className="mt-3 text-[12px] text-ink-3">
-            Connect your GitHub repo in <Link to={pp("/settings")} className="text-accent hover:underline">Settings</Link> to get code-level diffs.
+            Connect your GitHub repo in <Link to={pp("/settings?s=source")} className="text-accent hover:underline">Settings › Source code</Link> to get code-level diffs.
           </p>
         )}
         {r.code_error && <p className="mt-3 text-[12px] text-critical">{r.code_error}</p>}

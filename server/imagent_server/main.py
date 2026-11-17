@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
 
-from . import blueprints, compare, db, diagnose, experiments, github, judge, live, price_sync, projects, queries, stitch
+from . import blueprints, checks, compare, db, diagnose, engine, experiments, github, investigator, learning, rules, screener, judge, live, price_sync, projects, queries, stitch
 from . import pricing
 from .config import settings
 from .ingest import decode_request, split_rows
@@ -39,6 +39,7 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(live.reap_forever()))  # close runs that stopped reporting
     tasks.append(asyncio.create_task(judge.worker()))  # judges projects that have a key (theirs or the server's)
     tasks.append(asyncio.create_task(diagnose.worker()))  # groups failures into issues every few hours
+    tasks.append(asyncio.create_task(checks.verify_worker()))  # grades fix verifications when their replays finish
     yield
     for t in tasks:
         t.cancel()
@@ -174,6 +175,9 @@ class ProjectPatch(BaseModel):
     github_token: str | None = Field(None, max_length=400)
     github_branch: str | None = Field(None, max_length=200)
     github_path: str | None = Field(None, max_length=300)
+    engine: dict | None = None        # issue engine settings (merged into the saved ones)
+    preferences: dict | None = None   # learned preferences, as edited in Settings
+    overview: str | None = Field(None, max_length=20000)
 
 
 @app.post("/api/projects", dependencies=read)
@@ -198,7 +202,9 @@ async def api_update_project(project_id: str, body: ProjectPatch) -> dict:
     p = await projects.update(project_id, name=body.name, description=body.description, archived=body.archived,
                               rubric=body.rubric, judge_key=body.judge_key, judge_model=body.judge_model,
                               judge_base_url=body.judge_base_url,
-                              github={k: getattr(body, k) for k in ("github_repo", "github_token", "github_branch", "github_path")})
+                              github={k: getattr(body, k) for k in ("github_repo", "github_token", "github_branch", "github_path")},
+                              engine_patch=body.engine, overview=body.overview,
+                              preferences=json.dumps(learning.clean(body.preferences)) if body.preferences is not None else None)
     if not p:
         raise HTTPException(status_code=404, detail="project not found")
     return p
@@ -498,7 +504,7 @@ async def api_github_suggest(project_id: str, repo: str = Query(pattern=r"^[\w.-
 # ── Issues & diagnosis ──
 
 @app.get("/api/issues", dependencies=read)
-async def api_issues(project: str, status: str = Query("open", pattern="^(open|resolved|ignored|all)$")) -> list[dict]:
+async def api_issues(project: str, status: str = Query("open", pattern="^(open|resolved|dismissed|all)$")) -> list[dict]:
     return await diagnose.list_issues(project, status)
 
 
@@ -513,16 +519,57 @@ async def api_issue(issue_id: str) -> dict:
     i = await diagnose.get_issue(issue_id)
     if not i:
         raise HTTPException(status_code=404, detail="issue not found")
-    return i | {"diagnosis": await diagnose.get_diagnosis(f"issue:{issue_id}")}
+    return i | {"diagnosis": await diagnose.get_diagnosis(f"issue:{issue_id}"),
+                "evidence": await investigator.evidence(issue_id), "check": await checks.get_check(issue_id),
+                "examples": await checks.examples(issue_id), "verification": await checks.get_verify(issue_id)}
+
+
+@app.post("/api/issues/{issue_id}/check", dependencies=read)
+async def api_issue_check(issue_id: str) -> dict:
+    """Write (or rewrite) the issue's check and test it on its evidence — in the background."""
+    i = await diagnose.get_issue(issue_id)
+    if not i:
+        raise HTTPException(status_code=404, detail="issue not found")
+    if i["kind"] not in checks.AI_KINDS:
+        raise HTTPException(status_code=400, detail="this issue's rule check already finds every new case")
+    return {"started": checks.start_propose(issue_id)}
+
+
+class CheckPatch(BaseModel):
+    status: str = Field(pattern="^(active|draft|off)$")
+
+
+@app.patch("/api/issues/{issue_id}/check", dependencies=read)
+async def api_issue_check_status(issue_id: str, body: CheckPatch) -> dict:
+    c = await checks.set_check_status(issue_id, body.status)
+    if not c:
+        raise HTTPException(status_code=404, detail="no check for this issue")
+    return c
+
+
+@app.post("/api/issues/{issue_id}/verify", dependencies=read)
+async def api_issue_verify(issue_id: str) -> dict:
+    """Replay the issue's regression examples on the app's current code and grade them."""
+    try:
+        return await checks.start_verify(issue_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class IssuePatch(BaseModel):
-    status: str = Field(pattern="^(open|resolved|ignored)$")
+    status: str = Field("", pattern="^(|open|watching|fixing|resolved|ignored|incorrect)$")
+    reason: str = Field("", max_length=1000)  # e.g. why it was incorrectly flagged
+    severity: str | None = Field(None, pattern="^(high|medium|low)$")
 
 
 @app.patch("/api/issues/{issue_id}", dependencies=read)
 async def api_update_issue(issue_id: str, body: IssuePatch) -> dict:
-    i = await diagnose.set_status(issue_id, body.status)
+    i = await diagnose.set_status(issue_id, body.status, body.reason, body.severity)
+    if i:  # a person's choice: the engine learns from it at the next scan
+        if body.severity:
+            await learning.log(i, "severity", body.severity)
+        if body.status in ("incorrect", "ignored", "resolved", "watching"):
+            await learning.log(i, body.status, reason=body.reason)
     if not i:
         raise HTTPException(status_code=404, detail="issue not found")
     return i
@@ -571,6 +618,85 @@ async def api_trace_fix(trace_id: str) -> dict:
 @app.get("/api/traces/{trace_id}/diagnosis", dependencies=read)
 async def api_trace_diagnosis(trace_id: str) -> dict:
     return {"diagnosis": await diagnose.get_diagnosis(f"trace:{trace_id}")}
+
+
+# ── Issue engine: categories, tools, feedback ──
+
+@app.get("/api/engine/categories", dependencies=read)
+async def api_engine_categories() -> dict:
+    return {"categories": engine.CATEGORIES, "levels": engine.LEVELS}
+
+
+@app.get("/api/projects/{project_id}/tools", dependencies=read)
+async def api_project_tools(project_id: str) -> list[dict]:
+    """The app's tools (last 30 days) and how often each paused for approval."""
+    return await engine.tools(project_id)
+
+
+class FeedbackIn(BaseModel):
+    trace_id: str = Field("", max_length=64)
+    thread_id: str = Field("", max_length=300)
+    score: float | None = Field(None, ge=0, le=1)
+    comment: str = Field("", max_length=4000)
+    key: str = Field("user", max_length=40)
+    source: str = Field("app", max_length=40)
+    user_id: str = Field("", max_length=200)
+    at: str | None = None
+    project: str = Field("", max_length=200)  # the app's service name; a project key overrides it
+
+
+@app.post("/api/feedback")
+async def api_feedback(body: FeedbackIn, project: IngestProject) -> dict:
+    """Feedback from the app (SDK ``imagent.feedback``) on a run, or on a thread's latest run."""
+    pid = project or body.project
+    if not pid or not (body.trace_id or body.thread_id):
+        raise HTTPException(status_code=422, detail="needs a project key and a trace_id or thread_id")
+    at = _parse_time(body.at, dt.datetime.now(dt.timezone.utc))
+    row = await engine.add_feedback(pid, trace_id=body.trace_id, thread_id=body.thread_id, score=body.score,
+                                    comment=body.comment, key=body.key, source=body.source, user_id=body.user_id, at=at)
+    return {"id": row["id"], "trace_id": row["trace_id"]}
+
+
+@app.get("/api/engine/status", dependencies=read)
+async def api_engine_status(project: str) -> dict:
+    """Is a screening running, what's been read in the last week, and this month's spend vs the cap."""
+    p = await projects.get(project)
+    es = engine.settings(p)
+    rows = await db.query(f"""
+        SELECT count() AS screened, countIf(flagged = 1) AS flagged FROM {screener.SCREENED}
+        WHERE project = {{p:String}} AND screened_at >= now() - INTERVAL 7 DAY""", {"p": project})
+    waiting = await db.query(f"SELECT count() AS n FROM {rules.SIGNALS} FINAL WHERE project = {{p:String}} "
+                             f"AND rule = 'screener' AND verdict = ''", {"p": project})
+    return {"screening": screener.status(project), "screened_7d": rows[0]["screened"] if rows else 0,
+            "to_investigate": waiting[0]["n"] if waiting else 0,
+            "flagged_7d": rows[0]["flagged"] if rows else 0, "month_spend": round(await screener.month_spend(project), 4),
+            "monthly_cap": es["monthly_cap_usd"], "enabled": es["enabled"]}
+
+
+@app.get("/api/traces/{trace_id}/signals", dependencies=read)
+async def api_trace_signals(trace_id: str) -> list[dict]:
+    """What the rule checks found in this run (context explosion, guardrail bypass …)."""
+    return await rules.for_trace(trace_id)
+
+
+@app.get("/api/traces/{trace_id}/feedback", dependencies=read)
+async def api_trace_feedback(trace_id: str) -> list[dict]:
+    return await engine.feedback_for(trace_id)
+
+
+class FlagIn(BaseModel):
+    comment: str = Field("", max_length=4000)
+
+
+@app.post("/api/traces/{trace_id}/flag", dependencies=read)
+async def api_flag_trace(trace_id: str, body: FlagIn) -> dict:
+    """"Flag for engine": this run went wrong — the next scan investigates it first."""
+    spans = await queries.get_trace(trace_id)
+    if not spans:
+        raise HTTPException(status_code=404, detail="trace not found")
+    row = await engine.add_feedback(spans[0]["project"], trace_id=trace_id, thread_id=spans[0].get("thread_id") or "",
+                                    score=0, comment=body.comment, key="flag", source="imagent")
+    return {"id": row["id"]}
 
 
 class ReviewIn(BaseModel):

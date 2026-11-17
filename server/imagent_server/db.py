@@ -132,9 +132,14 @@ async def ensure_schema() -> None:
     from .experiments import DDL as EXPERIMENT_DDL
     from .price_sync import DDL as PRICES_DDL
     from .diagnose import DDL as DIAGNOSE_DDL
+    from .engine import DDL as ENGINE_DDL
+    from .rules import DDL as RULES_DDL
+    from .screener import DDL as SCREENER_DDL
+    from .learning import DDL as LEARNING_DDL
+    from .checks import DDL as CHECKS_DDL
 
     client = await get_client()
-    for ddl in [*_SCHEMA, *_MIGRATIONS, PRICES_DDL, *EXPERIMENT_DDL, *BLUEPRINT_DDL, *PROJECT_DDL, *DIAGNOSE_DDL]:
+    for ddl in [*_SCHEMA, *_MIGRATIONS, PRICES_DDL, *EXPERIMENT_DDL, *BLUEPRINT_DDL, *PROJECT_DDL, *DIAGNOSE_DDL, *ENGINE_DDL, *RULES_DDL, *SCREENER_DDL, *LEARNING_DDL, *CHECKS_DDL]:
         await client.command(ddl)
     logger.info("ClickHouse schema ready (%s)", SPANS)
 

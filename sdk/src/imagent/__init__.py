@@ -12,6 +12,7 @@
 
 from ._context import context
 from .decorators import observe
+from .feedback import current_trace_id, feedback
 from .redact import default_redactor, make_redactor
 from . import blueprint, runner
 from .blueprint import publish as publish_blueprint
@@ -29,6 +30,8 @@ def get_callback_handler():
 
 
 __all__ = [
+    "feedback",
+    "current_trace_id",
     "agent",
     "experiment",
     "blueprint",
