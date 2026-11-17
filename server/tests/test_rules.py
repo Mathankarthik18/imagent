@@ -36,3 +36,9 @@ def test_group_into_issues():
     assert issue["runs"] == 3 and issue["title"] == "vessel_qa up to 200k" and issue["trace_ids"][0] == "t2"
     assert rules.severity(issue) == "medium"
     assert rules.severity(issue | {"runs": 1, "peak": 22.0}) == "high"
+
+
+def test_guardrail_and_secrets_are_always_high():
+    assert rules.severity({"kind": "guardrail_bypass", "runs": 1, "location": "send_email"}) == "high"
+    assert rules.severity({"kind": "pii_leak", "runs": 1, "location": "secret in answers"}) == "high"
+    assert rules.severity({"kind": "pii_leak", "runs": 1, "location": "orchestrator"}) == "low"

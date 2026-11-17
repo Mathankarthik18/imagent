@@ -156,6 +156,9 @@ def outline(run: dict[str, Any], steps: list[dict[str, Any]], findings: list[dic
     """A run as a short numbered outline, and the span id behind each step number."""
     ids: list[str] = []
     lines = [f"request: {_clip(user_request(run.get('input_head') or ''), 400) or '(not captured)'}"]
+    if run.get("resume"):  # this run continued after a human-in-the-loop pause
+        lines.append(f"continued after a person's decision on a paused step: {_clip(run['resume'], 200)}"
+                     f"{' (the earlier run in this chat paused for approval)' if run.get('after_pause') else ''}")
     for fb in feedback:
         score = fb["score"]
         who = ("flagged by the team" if fb["key"] == "flag" else "user comment" if score is None
@@ -204,7 +207,8 @@ async def candidates(project: str, days: int, limit: int) -> list[dict[str, Any]
     (a script or test calling a tool directly) has no answer to judge and is skipped."""
     return await query(f"""
         SELECT r.trace_id AS trace_id, r.name AS name, r.agent_name AS agent, r.start_time AS start_time,
-               r.status AS status, left(r.input, 3000) AS input_head,
+               r.status AS status, left(r.input, 3000) AS input_head, left(r.attributes['imagent.resume'], 300) AS resume,
+               r.thread_id AS thread_id,
                (r.trace_id IN (SELECT trace_id FROM {FEEDBACK} WHERE project = {{p:String}}
                                 AND (key = 'flag' OR score < 0.5))) AS disliked,
                (r.trace_id IN (SELECT trace_id FROM {rules.SIGNALS} WHERE project = {{p:String}})) AS ruled
@@ -356,6 +360,12 @@ async def screen(project: str, proj: dict[str, Any], es: dict[str, Any], days: i
     runs = await candidates(project, days, LEVELS[es["level"]])
     if not runs:
         return {"screened": 0, "flagged": 0, "cost": 0.0}
+    paused = {r["thread_id"] for r in await query(f"""
+        SELECT DISTINCT thread_id FROM {SPANS} WHERE project = {{p:String}} AND thread_id != ''
+          AND attributes['imagent.interrupt'] != '' AND start_time >= now() - INTERVAL {{d:UInt32}} DAY""",
+                                                   {"p": project, "d": days + 1})}
+    for r in runs:
+        r["after_pause"] = bool(r["resume"]) and r["thread_id"] in paused
     by_agent: dict[str, list[dict]] = {}
     for r in runs:
         by_agent.setdefault(r["agent"] or r["name"], []).append(r)

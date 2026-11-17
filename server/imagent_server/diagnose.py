@@ -285,6 +285,7 @@ async def scan(project: str, *, days: int = WINDOW_DAYS, auto_diagnose: int = AU
         except Exception as exc:  # noqa: BLE001
             logger.warning("scan %s: screening didn't start", project, exc_info=True)
             errors.append(f"screening: {scan_error(exc)}")
+    found = combine(found)
     existing = await _issues(project)
     rows, fresh = merge(found, existing)
     if not errors:  # a failed step didn't look, so "not seen" doesn't mean gone
@@ -311,6 +312,27 @@ def scan_error(exc: BaseException) -> str:
         return "the query timed out"
     first = next((l.strip() for l in msg.splitlines() if l.strip()), type(exc).__name__)
     return f"{type(exc).__name__}: {first}"[:300]
+
+
+def combine(found: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One entry per issue: a rule and the investigator can both feed the same issue (e.g. a
+    guardrail bypass found by the approval rule and confirmed from a screener flag)."""
+    by: dict[str, dict[str, Any]] = {}
+    for f in found:
+        a = by.get(f["id"])
+        if a is None:
+            by[f["id"]] = dict(f)
+            continue
+        overlap = len(set(a["trace_ids"]) & set(f["trace_ids"]))
+        a["runs"] = a["runs"] + f["runs"] - overlap
+        a["events"] = a["events"] + f["events"]
+        a["failed_runs"] = max(a.get("failed_runs", 0), f.get("failed_runs", 0))
+        a["first_seen"] = min(_ts(a["first_seen"]), _ts(f["first_seen"]))
+        a["last_seen"] = max(_ts(a["last_seen"]), _ts(f["last_seen"]))
+        a["trace_ids"] = list(dict.fromkeys(a["trace_ids"] + f["trace_ids"]))[:8]
+        a["peak"] = max(a.get("peak") or 0, f.get("peak") or 0)
+        a["level"] = a.get("level") or f.get("level", "")
+    return list(by.values())
 
 
 def stale(existing: dict[str, dict[str, Any]], touched: set[str]) -> list[dict[str, Any]]:

@@ -153,7 +153,10 @@ async def response_truncation(project: str, days: int) -> tuple[list[dict], list
 # the prompts it was given, which can legitimately hold keys).
 SECRET_RE = (r"sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|AKIA[0-9A-Z]{16}"
              r"|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|imk_[A-Za-z0-9_-]{20,}"
-             r"|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?i:password|passwd|pwd)\\?\"?\s*[:=]\s*\\?\"?[^\s\"\\]{6,}")
+             r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+             # the SDK masks secrets before they leave the app — the marker still means the agent wrote one
+             r"|\[REDACTED_(?:API_KEY|PRIVATE_KEY|AWS_KEY|GITHUB_TOKEN|SLACK_TOKEN|JWT|CARD)\]|Bearer \[REDACTED\]"
+             r"|(?i:password|passwd|pwd)\\?\"?\s*[:=]\s*\\?\"?[^\s\"\\]{6,}")
 
 
 async def secrets(project: str, days: int) -> tuple[list[dict], list[dict]]:
@@ -168,7 +171,9 @@ async def secrets(project: str, days: int) -> tuple[list[dict], list[dict]]:
         ORDER BY start_time DESC LIMIT 2000""", {"p": project, "days": days, "re": SECRET_RE})
     signals = []
     for r in rows:
-        masked = (r["hit"][:6] + "…") if r["hit"] else "a secret"
+        hit = r["hit"] or ""
+        masked = ("a secret (" + hit.strip("[]").replace("REDACTED_", "").replace("_", " ").lower() + ", masked by the SDK)"
+                  if "REDACTED" in hit else (hit[:6] + "…") if hit else "a secret")
         if r["kind"] == "tool":
             loc, detail = f"secret sent to {r['name']}", f"the agent passed {masked} to {r['name']}"
         else:
@@ -281,15 +286,13 @@ async def focus_for(issue_id: str, trace_id: str) -> str | None:
 
 def severity(issue: dict[str, Any]) -> str | None:
     """Severity for engine categories (None: an error/loop issue)."""
-    if issue["kind"] == "pii_leak" and issue.get("location", "").startswith("secret"):
-        return "high"
+    if issue["kind"] == "guardrail_bypass" or (issue["kind"] == "pii_leak" and issue.get("location", "").startswith("secret")):
+        return "high"  # an unapproved action or a leaked secret is serious however often it happens
     if issue["kind"] == "response_truncation":
         return "medium" if issue["runs"] >= 3 else "low"
     from .engine import model_categories
     if issue["kind"] in model_categories():  # filed by the investigator (which usually sets the level itself)
         return "high" if issue["runs"] >= 5 else "medium" if issue["runs"] >= 2 else "low"
-    if issue["kind"] == "guardrail_bypass":
-        return "high"
     if issue["kind"] == "context_explosion":
         peak = issue.get("peak") or 0  # worst case ÷ the limit
         if peak >= 10 or (issue["runs"] >= 5 and peak >= 3):

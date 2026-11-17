@@ -144,8 +144,10 @@ async def earlier_turns(spans: list[dict[str, Any]], limit: int = 4) -> str:
         ps = await queries.get_trace(r["trace_id"])
         pr = compare.agent_span(ps) or {}
         tools = list(dict.fromkeys(s["name"] for s in ps if s.get("kind") == "tool"))
+        paused = [s["name"] for s in ps if (s.get("attributes") or {}).get("imagent.interrupt")]
         turns.append(f"user: {_clip(compare.readable(pr.get('input', ''), roles=('user', 'human')), 800)}\n"
                      f"{'tools run: ' + ', '.join(tools[:15]) + chr(10) if tools else ''}"
+                     f"{'paused for a person (approval) at: ' + ', '.join(paused) + chr(10) if paused else ''}"
                      f"agent: {_clip(diagnose.final_answer(ps, pr), 2500)}")
     out = "\n\n".join(turns)
     return out if len(out) <= HISTORY_CHARS else "…" + out[-HISTORY_CHARS:]
@@ -158,6 +160,10 @@ def evidence_context(spans: list[dict[str, Any]], focus: dict[str, Any] | None, 
     from . import compare
     root = compare.agent_span(spans) or {}
     parts = []
+    resume = (root.get("attributes") or {}).get("imagent.resume")
+    if resume:
+        parts.append(f"## This run continued after a person's decision\nIt resumed a run that paused (e.g. for approval); "
+                     f"the person's answer: {_clip(resume, 600)}")
     earlier = conversation_before(spans, root) or history
     if earlier:
         parts.append("## Earlier in this conversation (what the agent already knew from previous turns)\n" + earlier)

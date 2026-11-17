@@ -53,3 +53,13 @@ def test_conversation_before_reads_cut_input():
     text = inv.conversation_before(spans, {})
     assert "user: find the noon thread" in text and "[calls get_thread]" in text and "22 Oct 13:57" in text
     assert "draft a chase" not in text and "You are Bosun" not in text
+
+
+def test_combine_merges_rule_and_investigator_counts():
+    a = {"id": "x", "runs": 4, "events": 4, "failed_runs": 0, "first_seen": T0, "last_seen": T0 + dt.timedelta(hours=2),
+         "trace_ids": ["t1", "t2", "t3", "t4"], "peak": 0.0, "level": ""}
+    b = {"id": "x", "runs": 2, "events": 2, "failed_runs": 0, "first_seen": T0 - dt.timedelta(hours=1), "last_seen": T0,
+         "trace_ids": ["t4", "t9"], "peak": 0.0, "level": "high"}
+    [c] = d.combine([a, b, ])
+    assert c["runs"] == 5 and c["events"] == 6 and c["trace_ids"] == ["t1", "t2", "t3", "t4", "t9"] and c["level"] == "high"
+    assert c["first_seen"] == T0 - dt.timedelta(hours=1)
