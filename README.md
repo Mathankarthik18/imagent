@@ -14,6 +14,7 @@
 <p align="center">
   <a href="#-quick-start"><b>Quick start</b></a> ·
   <a href="#-features"><b>Features</b></a> ·
+  <a href="#-issues">Issues</a> ·
   <a href="#-experiments">Experiments</a> ·
   <a href="#-how-it-works">How it works</a> ·
   <a href="#-configuration">Configuration</a> ·
@@ -24,12 +25,14 @@
 
 **imagent** is an open-source, self-hosted alternative to hosted LLM tracing tools. Point your
 LangChain / LangGraph app at it with **one line of code** and get every agent run as a trace,
-your app's structure as a live **blueprint**, and **experiments** that replay real runs with
-another model — judged for answer quality, not just "did it behave the same".
+your app's structure as a live **blueprint**, an **issue engine** that reads your production runs
+for failures that never raise an error — and diagnoses them against your code, down to a fix PR —
+and **experiments** that replay real runs with another model, judged for answer quality.
 
 - **No limits, no seats.** Your traces live in your own ClickHouse; keep as many as your disk holds.
 - **Built on OpenTelemetry.** GenAI semantic conventions in, nothing locked in — spans can go to SigNoz or Jaeger too.
 - **Made for agents.** Sub-agents, tool calls, middleware and model swaps are first-class, not an afterthought.
+- **Finds what logs don't.** Hallucinations, silent tool errors, wrong tools, guardrail bypasses — 15 failure categories, confirmed against the full run before they reach your board.
 
 ### ▶ See it in action
 
@@ -53,6 +56,18 @@ another model — judged for answer quality, not just "did it behave the same".
       <img src="docs/assets/icons/blueprint.svg" width="40" alt="" /><br />
       <b>Blueprint</b><br />
       Your agent app drawn from the framework itself: agents, sub-agents, models, prompts, tools and middleware — including parts that never ran — with live stats on top.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <img src="docs/assets/icons/issues.svg" width="40" alt="" /><br />
+      <b>Issue engine</b><br />
+      Rule checks on every run plus a model that reads them: 15 failure categories, from crashes to hallucinations and silent tool errors. Flags are confirmed against the full run and grouped into issues by cause.
+    </td>
+    <td valign="top">
+      <img src="docs/assets/icons/fix.svg" width="40" alt="" /><br />
+      <b>Diagnose & fix</b><br />
+      Root cause read from the run <i>and</i> your GitHub repo, a fix as a diff, one click to a draft PR on a new branch — then a tested check per issue and a replay that proves the fix.
     </td>
   </tr>
   <tr>
@@ -134,7 +149,12 @@ with imagent.context(thread_id=conversation_id, user_id=user.id, tags=["email"])
 
 @imagent.observe(kind="tool")
 def lookup_vessel(imo: str): ...      # trace your own functions
+
+imagent.feedback(thread_id=conversation_id, score=0, comment="wrong vessel")  # a user's 👎 → read first by the issue engine
 ```
+
+`user_id` (and `thread_id`) are also picked up from LangChain's `config["metadata"]`, so apps that
+already set them for LangSmith get per-user filtering for free.
 
 </details>
 
@@ -155,6 +175,57 @@ in time with inputs and outputs streaming in. Pick two runs to **compare** them 
 deepagents sub-agents, every tool with its description, the middleware chain, the bound model and
 the system prompt — and draws the app. Live numbers come from your traces: runs, p50/p95, cost,
 tool usage, and which models *actually* ran (with a warning when that differs from the config).
+
+## 🩺 Issues
+
+A tracing tool shows you what happened. The **issue engine** tells you what went wrong — including
+runs that "succeeded" with a wrong answer. Every few hours (or on **Scan now**) it reads your
+production runs and keeps an issue board, like LangSmith Engine, on your own server.
+
+| | Categories | How they're found |
+|---|---|---|
+| **Answers** | Hallucination · Task evasion · Missing capability awareness · Feature gap · Response truncation | AI reads the run · truncation is a rule (`finish_reason = length`) |
+| **Tools** | Silent tool error · Wrong tool · Incorrect tool args · Failed error recovery | AI, with hints (error-looking tool results are marked) |
+| **Behaviour** | Agent looping · Flawed plan · System prompt drift | Loops: rule + AI · the rest: AI, with the agent's system prompt |
+| **Safety & cost** | Guardrail bypass · PII leak · Context explosion | Rules (unapproved actions, secrets the agent writes, token/size limits) + AI |
+| | Errors / crashes | Grouped by cause, numbers and ids masked |
+
+**How a run becomes an issue**
+
+1. **Rules** run on every run for free: context and output limits, token-limit cut-offs, secrets
+   in what the agent writes, tools that ran without the approval they need (the SDK records
+   human-in-the-loop pauses and decisions), loops.
+2. **Screener** — a cheap model reads each new run as a ~2k-character outline (request, each step,
+   tool results, final answer) in batches, with the agent's system prompt and tool list, and flags
+   suspects. Runs your users gave 👎 or someone flagged are read first.
+3. **Investigator** — a strong model reads each flagged run in full (earlier turns of the chat
+   included) against the issue board: rejects it, adds it as evidence to an open issue, or files a
+   new one with a description of the pattern and a severity. Most false alarms stop here.
+4. **Diagnose** — root cause from the run and the files behind it in your **GitHub repo** (stack
+   trace files first), a fix as exact edits, and **Create fix branch & draft PR**. imagent never
+   merges or touches existing branches.
+5. **Keep it honest** — each issue gets a **check** that's tested before it's switched on (it must
+   catch the evidence and pass clean runs), then runs on new runs; evidence runs become
+   **regression examples**; **Verify fix** replays them on your current code and grades them.
+
+The board learns from you: *Incorrectly flagged*, ignore or resolve lowers a category's priority,
+your reasons become rules the engine follows, and a fix PR marks a category as real. Issues not
+seen for 14 days close themselves and re-open if it happens again. Each project sets which
+categories to look for, the two models, how many runs a scan reads, and a **monthly spend cap**.
+
+> Reading 150 real runs of a 15-agent app costs about **$0.03** with a Haiku-class screener.
+
+<details>
+<summary><b>Connect GitHub (one-time)</b></summary>
+
+Create a GitHub App with **Device Flow** on and *Contents* + *Pull requests* read & write, install
+it on your repo, and put its client id in imagent's `.env` (`IMAGENT_GITHUB_CLIENT_ID`,
+`IMAGENT_GITHUB_APP_SLUG`). Then **Settings › Source code › Connect GitHub** shows a code to enter
+on github.com — no callback URL, so it works behind an auth proxy and on localhost. Step by step:
+[`deploy/server/README.md`](deploy/server/README.md#connect-github-for-diagnosing-issues). A pasted
+read-only token works too.
+
+</details>
 
 ## 🧪 Experiments
 
@@ -195,14 +266,15 @@ flowchart LR
   S -- "blueprint · runner polling" --> I
   I --> C[("ClickHouse")]
   I --> U["Web UI"]
-  I -. "AI judge (optional)" .-> J["Any OpenAI-compatible model"]
+  I -. "judge · screener · investigator" .-> J["Any OpenAI-compatible model"]
+  I -. "read code · fix PRs (optional)" .-> G["GitHub"]
   S -. "optional: same spans" .-> O["SigNoz / Jaeger"]
 ```
 
 | Directory | What |
 |---|---|
 | [`sdk/`](sdk) | Python library `imagent`: tracing (`init`, `observe`, `context`), blueprints, the experiment runner, redaction |
-| [`server/`](server) | FastAPI: OTLP ingest → ClickHouse, cost, read API, projects, experiments, AI judge; serves the UI |
+| [`server/`](server) | FastAPI: OTLP ingest → ClickHouse, cost, read API, projects, experiments, AI judge, the issue engine (rules, screener, investigator, checks, diagnosis, GitHub); serves the UI |
 | [`ui/`](ui) | React + Vite + Tailwind web app, with its own icon set and brand ([`design/brand`](design/brand)) |
 | [`examples/`](examples) | Demo agents with fake models, and a demo experiment runner |
 
@@ -235,6 +307,12 @@ accepts spans from OpenLLMetry, OpenInference and vendor SDKs.
 | `IMAGENT_JUDGE_MODEL` | `anthropic/claude-sonnet-5.5` | Judge model |
 | `IMAGENT_JUDGE_BASE_URL` | OpenRouter | Any OpenAI-compatible endpoint |
 | `IMAGENT_PRICE_SYNC` | `true` | Daily model-price sync |
+| `IMAGENT_SCAN_HOURS` | `6` | How often the issue engine scans each project |
+| `IMAGENT_STALE_DAYS` | `14` | Open issues not seen this long close themselves |
+| `IMAGENT_AUTO_DIAGNOSE` | `3` | New issues diagnosed automatically per scan |
+| `IMAGENT_GITHUB_CLIENT_ID` | — | GitHub App client id — turns on **Connect GitHub** |
+| `IMAGENT_GITHUB_APP_SLUG` | — | The app's slug — adds a "give access to more repos" link |
+| `IMAGENT_GITHUB_CLIENT_SECRET` | — | Only if the app's user tokens expire |
 
 **SDK** (environment or the app's `.env`)
 
@@ -245,10 +323,12 @@ accepts spans from OpenLLMetry, OpenInference and vendor SDKs.
 | `IMAGENT_SERVICE` | `default` | Name of this process (e.g. `api`, `worker`) |
 | `IMAGENT_EXPERIMENTS` | `false` | Let this app run experiment replays |
 | `IMAGENT_AUTO_BLUEPRINT` | `true` | Publish each agent's blueprint on its first run |
-| `IMAGENT_MAX_CONTENT_CHARS` | `32000` | Truncate captured payloads |
+| `IMAGENT_MAX_CONTENT_CHARS` | `32000` | Truncate captured payloads (the start and the end are kept) |
+| `IMAGENT_ENABLED` | `true` | `false` turns tracing off; it's also off inside `pytest` unless set to `true` |
 
 > **Security:** traces contain prompts and user content. Set `IMAGENT_READ_KEY` and use project
-> keys before exposing imagent beyond localhost.
+> keys before exposing imagent beyond localhost. Model and GitHub keys are stored on your server
+> and never sent back to the browser; the issue engine only sends run content to the model you configure.
 
 ## 🛠 Development
 
@@ -268,9 +348,11 @@ Tests: `cd sdk && .venv/bin/pytest` · `cd server && .venv/bin/pytest` (needs Cl
 - [x] Blueprint from the framework, with live stats
 - [x] Experiments: per-agent model swaps, recorded / live tools
 - [x] AI judge with project rubrics and human review
-- [ ] Datasets — save runs as regression sets and run them in CI
+- [x] Issue engine: 15 failure categories, screener + investigator, issue board that learns
+- [x] Diagnose against your GitHub code, fix branch & draft PR, per-issue checks, fix verification
+- [ ] Alerts for new high-severity issues (Slack, email)
+- [ ] Datasets — promote regression examples into sets and run them in CI
 - [ ] Prompt registry with versions linked to LLM spans
-- [ ] Failure clustering and anomaly alerts (cost spikes, tool-call loops, latency regressions)
 - [ ] "Ask your traces" — natural language over the spans table
 - [ ] TypeScript SDK on the same OTLP schema
 
