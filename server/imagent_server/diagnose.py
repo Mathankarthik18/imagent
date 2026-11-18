@@ -250,26 +250,45 @@ def merge(found: list[dict[str, Any]], existing: dict[str, dict[str, Any]]) -> t
 async def scan(project: str, *, days: int = WINDOW_DAYS, auto_diagnose: int = AUTO_DIAGNOSE,
                screen: bool = True) -> dict[str, Any]:
     """Errors, loops and rule findings now; AI screening of new runs starts in the background and
-    re-scans when it has flagged something (``screen=False`` on that pass)."""
+    re-scans when it has flagged something (``screen=False`` on that pass).
+
+    Each step runs on its own: one failing (e.g. ClickHouse out of memory on a big week) is
+    reported in ``errors`` and the rest still run — and nothing is closed as stale, because a
+    failed step means "not seen" can't be trusted."""
     from . import engine, learning, projects, rules, screener
+    errors: list[str] = []
+
+    async def step(name: str, coro: Any, default: Any) -> Any:
+        try:
+            return await coro
+        except Exception as exc:  # noqa: BLE001 — keep scanning; say what broke
+            logger.warning("scan %s: %s failed", project, name, exc_info=True)
+            errors.append(f"{name}: {scan_error(exc)}")
+            return default
+
     proj = await projects.get(project)
     if proj:
-        res = await learning.learn(project, proj)  # what people did since the last scan
+        res = await step("learning", learning.learn(project, proj), {})  # what people did since the last scan
         if res.get("learned"):
             logger.info("learned for %s: %s", project, res)
             proj = await projects.get(project)
     es = engine.settings(proj)
-    found = await detect(project, days)
-    ruled, rule_status = await rules.detect(project, days, es)
+    found = await step("errors & loops", detect(project, days), [])
+    ruled, rule_status = await step("rule checks", rules.detect(project, days, es), ([], {}))
     found += ruled
     if es["enabled"]:
         from . import investigator
-        found += await investigator.ai_issues(project, days)
+        found += await step("AI issues", investigator.ai_issues(project, days), [])
     if screen and es["enabled"] and proj:
-        rule_status["screening"] = "started" if screener.start(project, proj, es, days) else "already running"
+        try:
+            rule_status["screening"] = "started" if screener.start(project, proj, es, days) else "already running"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scan %s: screening didn't start", project, exc_info=True)
+            errors.append(f"screening: {scan_error(exc)}")
     existing = await _issues(project)
     rows, fresh = merge(found, existing)
-    rows += stale(existing, {r["id"] for r in rows})
+    if not errors:  # a failed step didn't look, so "not seen" doesn't mean gone
+        rows += stale(existing, {r["id"] for r in rows})
     await _write_issues(rows)
     started = 0
     if auto_diagnose and fresh:
@@ -278,7 +297,20 @@ async def scan(project: str, *, days: int = WINDOW_DAYS, auto_diagnose: int = AU
             for i in ranked[:auto_diagnose]:
                 if await start(f"issue:{i['id']}", project):
                     started += 1
-    return {"issues": len(found), "updated": len(rows), "new": len(fresh), "diagnosing": started, **rule_status}
+    return {"issues": len(found), "updated": len(rows), "new": len(fresh), "diagnosing": started, **rule_status,
+            "errors": errors}
+
+
+def scan_error(exc: BaseException) -> str:
+    """A scan step's failure in one line (ClickHouse errors are pages long)."""
+    msg = str(exc)
+    if "MEMORY_LIMIT_EXCEEDED" in msg or "Code: 241" in msg:
+        return ("ClickHouse ran out of memory reading the last days of runs — give ClickHouse more memory "
+                "(Colima) or scan fewer days")
+    if "TIMEOUT_EXCEEDED" in msg or "Code: 159" in msg or isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "the query timed out"
+    first = next((l.strip() for l in msg.splitlines() if l.strip()), type(exc).__name__)
+    return f"{type(exc).__name__}: {first}"[:300]
 
 
 def stale(existing: dict[str, dict[str, Any]], touched: set[str]) -> list[dict[str, Any]]:
@@ -868,7 +900,9 @@ async def worker() -> None:
             for r in rows:
                 try:
                     res = await scan(r["id"])
-                    if res["new"]:
+                    if res["errors"]:
+                        logger.warning("issues scan %s finished with errors: %s", r["id"], res["errors"])
+                    elif res["new"]:
                         logger.info("issues scan %s: %s", r["id"], res)
                 except Exception as exc:  # noqa: BLE001 — one project must not stop the rest
                     logger.warning("issues scan %s failed: %s", r["id"], exc)

@@ -235,3 +235,40 @@ def test_get_diagnosis_returns_its_project(monkeypatch):
 
     monkeypatch.setattr(d, "query", q)
     assert asyncio.run(d.get_diagnosis("issue:i1"))["project"] == "bosun"
+
+
+def test_scan_survives_a_failing_step_and_closes_nothing(monkeypatch):
+    import asyncio
+
+    from imagent_server import engine, learning, projects, rules
+
+    async def proj(p):
+        return {"id": p}
+
+    async def learn(p, pr):
+        return {}
+
+    async def boom(*a, **k):
+        raise RuntimeError("Code: 241. DB::Exception: MEMORY_LIMIT_EXCEEDED blah\nmore")
+
+    async def ruled(p, days, es):
+        return [], {}
+
+    written = []
+
+    async def existing(p):
+        return {"old": {"id": "old", "status": "open", "last_seen": T0, "trace_ids": []}}
+
+    async def write(rows):
+        written.extend(rows)
+
+    monkeypatch.setattr(projects, "get", proj)
+    monkeypatch.setattr(learning, "learn", learn)
+    monkeypatch.setattr(engine, "settings", lambda p: {"enabled": False})
+    monkeypatch.setattr(d, "detect", boom)
+    monkeypatch.setattr(rules, "detect", ruled)
+    monkeypatch.setattr(d, "_issues", existing)
+    monkeypatch.setattr(d, "_write_issues", write)
+    res = asyncio.run(d.scan("p", auto_diagnose=0))
+    assert res["errors"] and "ran out of memory" in res["errors"][0]
+    assert written == []  # the old issue isn't closed as stale on a failed look

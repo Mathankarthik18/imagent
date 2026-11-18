@@ -511,7 +511,11 @@ async def api_issues(project: str, status: str = Query("open", pattern="^(open|r
 @app.post("/api/issues/scan", dependencies=read)
 async def api_scan_issues(project: str, days: int = Query(diagnose.WINDOW_DAYS, ge=1, le=90)) -> dict:
     """Look for issues now instead of waiting for the next scheduled scan."""
-    return await diagnose.scan(project, days=days)
+    try:
+        return await diagnose.scan(project, days=days)
+    except Exception as exc:  # noqa: BLE001 — never a bare 500
+        logger.exception("scan %s failed", project)
+        raise HTTPException(status_code=500, detail=f"The scan failed — {diagnose.scan_error(exc)}") from exc
 
 
 @app.get("/api/issues/{issue_id}", dependencies=read)

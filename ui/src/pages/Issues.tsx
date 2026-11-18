@@ -38,7 +38,7 @@ export function Issues() {
     wasScreening.current = !!engine.data?.screening;
   }, [engine.data, project, qc]);
   const scan = useMutation({
-    mutationFn: () => apiPost<{ issues: number; new: number; diagnosing: number }>(`/api/issues/scan?project=${encodeURIComponent(project)}`, {}),
+    mutationFn: () => apiPost<{ issues: number; new: number; diagnosing: number; errors?: string[] }>(`/api/issues/scan?project=${encodeURIComponent(project)}`, {}),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["issues", project] }); qc.invalidateQueries({ queryKey: ["engine-status", project] }); },
   });
 
@@ -72,6 +72,12 @@ export function Issues() {
         </div>
       )}
       {scan.isError && <div className="mb-3"><ErrorBox error={scan.error} /></div>}
+      {!!scan.data?.errors?.length && (
+        <div className="mb-3 rounded-lg border border-accent/40 bg-accent/5 px-4 py-3 text-[12.5px] text-ink">
+          <div className="font-medium">The scan finished, but part of it failed:</div>
+          <ul className="mt-1 space-y-0.5 text-ink-2">{scan.data.errors.map((e) => <li key={e}>• {e}</li>)}</ul>
+        </div>
+      )}
 
       {(issues.data ?? []).length > 0 && (
         <div className="mb-3 flex flex-wrap gap-1.5">
