@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
 
-from . import blueprints, checks, compare, db, diagnose, engine, experiments, github, investigator, learning, rules, screener, judge, live, price_sync, projects, queries, stitch
+from . import blueprints, checks, fix_chat, compare, db, diagnose, engine, experiments, github, investigator, learning, rules, screener, judge, live, price_sync, projects, queries, stitch
 from . import pricing
 from .config import settings
 from .ingest import decode_request, split_rows
@@ -602,6 +602,12 @@ async def _fix(target: str) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ValueError, github.WriteError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:  # GitHub reads: urllib HTTPError/URLError, timeouts
+        logger.warning("fix %s: %s", target, exc)
+        raise HTTPException(status_code=502, detail=github.explain(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — never a bare 500: say what broke
+        logger.exception("fix %s failed", target)
+        raise HTTPException(status_code=500, detail=f"Creating the fix branch failed: {type(exc).__name__}: {exc}"[:400]) from exc
 
 
 @app.post("/api/issues/{issue_id}/fix", dependencies=read)
@@ -613,6 +619,66 @@ async def api_issue_fix(issue_id: str) -> dict:
 @app.post("/api/traces/{trace_id}/fix", dependencies=read)
 async def api_trace_fix(trace_id: str) -> dict:
     return await _fix(f"trace:{trace_id}")
+
+
+# ── Discuss a diagnosis ──
+
+class ChatIn(BaseModel):
+    message: str = Field(..., max_length=4000)
+
+
+async def _chat_get(target: str) -> dict:
+    d = await diagnose.get_diagnosis(target)
+    since = d["created_at"] if d else None
+    return {"messages": await fix_chat.messages(target, since) if d else [], "thinking": fix_chat.thinking(target)}
+
+
+async def _chat_post(target: str, body: ChatIn) -> dict:
+    try:
+        return {"message": await fix_chat.ask(target, body.message)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+async def _chat_adopt(target: str, message_id: str) -> dict:
+    try:
+        return {"result": await fix_chat.adopt(target, message_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/issues/{issue_id}/chat", dependencies=read)
+async def api_issue_chat(issue_id: str) -> dict:
+    return await _chat_get(f"issue:{issue_id}")
+
+
+@app.post("/api/issues/{issue_id}/chat", dependencies=read)
+async def api_issue_chat_post(issue_id: str, body: ChatIn) -> dict:
+    """Ask about the diagnosis; answered in the background (poll the GET)."""
+    return await _chat_post(f"issue:{issue_id}", body)
+
+
+@app.post("/api/issues/{issue_id}/chat/{message_id}/adopt", dependencies=read)
+async def api_issue_chat_adopt(issue_id: str, message_id: str) -> dict:
+    """Use a revised fix from the conversation as the diagnosis's fix."""
+    return await _chat_adopt(f"issue:{issue_id}", message_id)
+
+
+@app.get("/api/traces/{trace_id}/chat", dependencies=read)
+async def api_trace_chat(trace_id: str) -> dict:
+    return await _chat_get(f"trace:{trace_id}")
+
+
+@app.post("/api/traces/{trace_id}/chat", dependencies=read)
+async def api_trace_chat_post(trace_id: str, body: ChatIn) -> dict:
+    return await _chat_post(f"trace:{trace_id}", body)
+
+
+@app.post("/api/traces/{trace_id}/chat/{message_id}/adopt", dependencies=read)
+async def api_trace_chat_adopt(trace_id: str, message_id: str) -> dict:
+    return await _chat_adopt(f"trace:{trace_id}", message_id)
 
 
 @app.get("/api/traces/{trace_id}/diagnosis", dependencies=read)

@@ -255,6 +255,27 @@ class WriteError(RuntimeError):
     pass
 
 
+def explain(exc: BaseException) -> str:
+    """A GitHub failure as a sentence a person can act on (for reads, which raise urllib errors)."""
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            detail = exc.read().decode(errors="replace")[:200]
+        except Exception:  # noqa: BLE001 — body already read or closed
+            detail = ""
+        if exc.code == 401:
+            return "GitHub rejected the token (HTTP 401) — reconnect GitHub in Settings › Source code."
+        if exc.code == 403 and "rate limit" in detail.lower():
+            return "GitHub's API rate limit was hit — wait a few minutes and try again."
+        if exc.code in (403, 404):
+            return (f"imagent can't read this repo or branch on GitHub (HTTP {exc.code}) — check the repo, branch and "
+                    "folder in Settings › Source code, and that the GitHub App is installed on the repo.")
+        return f"GitHub returned HTTP {exc.code}{': ' + detail if detail else ''}"
+    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError)):
+        reason = getattr(exc, "reason", exc)
+        return f"Couldn't reach GitHub ({reason}) — check the server's internet connection and try again."
+    return str(exc)
+
+
 def _send(cfg: dict[str, str], method: str, url: str, body: dict[str, Any]) -> Any:
     req = urllib.request.Request(API + url, data=json.dumps(body).encode(), method=method, headers={
         "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "imagent",

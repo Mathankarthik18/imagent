@@ -166,8 +166,16 @@ def test_create_fix_commits_on_latest_and_refuses_stale(monkeypatch):
         return {"branch": kw["branch_name"], "commit": "c1", "url": "u"}
 
     monkeypatch.setattr(github, "create_fix_branch", branch)
-    monkeypatch.setattr(github, "open_pr", lambda cfg, **kw: {"number": 7, "url": "pr", "draft": True})
+    from imagent_server import fix_chat
+    bodies = []
+
+    async def chat(target, since=None):
+        return [{"role": "user", "content": "use .get"}, {"role": "assistant", "content": "Agreed."}]
+
+    monkeypatch.setattr(fix_chat, "messages", chat)
+    monkeypatch.setattr(github, "open_pr", lambda cfg, **kw: bodies.append(kw["body"]) or {"number": 7, "url": "pr", "draft": True})
     out = asyncio.run(d.create_fix("trace:t1"))
+    assert "### Discussion" in bodies[0] and "**Developer:** use .get" in bodies[0]
     assert out["pr_number"] == 7 and out["branch"].startswith("imagent/fix-t1-missing-context")
     assert made["base_sha"] == "sha1" and made["files"]["app/cp.py"] == "def f(c):\n    return c.get('x')\n"
     assert saved["result"]["fix_branch"]["pr_url"] == "pr"
@@ -192,3 +200,38 @@ def test_final_answer_is_the_last_model_message():
          "output": '{"role": "assistant", "content": "Fleet report: 19 vessels"}'},
     ]
     assert d.final_answer(spans, spans[0]) == "Fleet report: 19 vessels"
+
+
+def test_github_read_errors_become_a_message_not_a_500(monkeypatch):
+    import io
+    import urllib.error
+
+    from fastapi.testclient import TestClient
+
+    from imagent_server import github, main
+
+    def boom(target):
+        raise urllib.error.HTTPError("u", 404, "Not Found", {}, io.BytesIO(b'{"message":"Not Found"}'))
+
+    async def fail(target):
+        boom(target)
+
+    monkeypatch.setattr(d, "create_fix", fail)
+    with TestClient(main.app, raise_server_exceptions=False) as c:
+        r = c.post("/api/issues/i1/fix")
+    assert r.status_code == 502 and "Settings › Source code" in r.json()["detail"]
+
+    assert "Couldn't reach GitHub" in github.explain(urllib.error.URLError("timed out"))
+    assert "HTTP 401" in github.explain(urllib.error.HTTPError("u", 401, "x", {}, io.BytesIO(b"")))
+
+
+def test_get_diagnosis_returns_its_project(monkeypatch):
+    """create_fix reads d["project"]; without it every 'Create fix branch' was a KeyError → bare 500."""
+    import asyncio
+
+    async def q(sql, params=None):
+        return [{"target": "issue:i1", "project": "bosun", "status": "done", "error": "", "note": "",
+                 "created_at": T0, "updated_at": T0, "result": "{}"}]
+
+    monkeypatch.setattr(d, "query", q)
+    assert asyncio.run(d.get_diagnosis("issue:i1"))["project"] == "bosun"

@@ -472,7 +472,13 @@ export interface DiagnosisResult {
   focus: { span_id: string; name: string; kind: string } | null;
   files: { path: string; lines: number[] }[]; repo: { repo: string; branch: string; commit: string } | null;
   code_error: string; model: string; cost: number; at: string; trace_id?: string; fix_branch?: FixBranch;
+  fix_from?: { message: string; at: string };
 }
+export interface FixChatMessage {
+  id: string; role: "user" | "assistant" | "error"; content: string; cost: number; at: string;
+  fix: { explanation: string; changes: FixChange[] } | null;
+}
+export interface FixChat { messages: FixChatMessage[]; thinking: boolean }
 export interface Diagnosis {
   target: string; status: DiagnosisStatus; error: string; note: string; created_at: string; updated_at: string;
   result: DiagnosisResult | Record<string, never>;

@@ -369,7 +369,7 @@ async def get_diagnosis(target: str) -> dict[str, Any] | None:
     if not rows:
         return None
     r = rows[0]
-    return {"target": r["target"], "status": r["status"], "error": r["error"], "note": r["note"],
+    return {"target": r["target"], "project": r["project"], "status": r["status"], "error": r["error"], "note": r["note"],
             "created_at": r["created_at"], "updated_at": r["updated_at"], "result": _load(r["result"])}
 
 
@@ -790,7 +790,7 @@ class StaleFix(RuntimeError):
     """The code changed since the diagnosis: its edits no longer apply."""
 
 
-def _pr_body(r: dict[str, Any], issue: dict[str, Any] | None) -> str:
+def _pr_body(r: dict[str, Any], issue: dict[str, Any] | None, discussion: list[str] | None = None) -> str:
     lines = [f"**{r.get('summary', '')}**", ""]
     if issue:
         lines += [f"Issue: {issue['title']} — {issue['runs']} runs affected, {issue['failed_runs']} failed "
@@ -801,6 +801,7 @@ def _pr_body(r: dict[str, Any], issue: dict[str, Any] | None) -> str:
     lines += ["### Fix", r.get("fix", {}).get("explanation", ""), ""]
     if r.get("verify"):
         lines += ["### How to check", r["verify"], ""]
+    lines += discussion or []
     lines += [f"_Diagnosed by imagent from run `{r.get('trace_id', '')}` with {r.get('model', '')} "
               f"({r.get('confidence', '')} confidence). Review before merging._"]
     return "\n".join(lines)
@@ -836,7 +837,14 @@ async def create_fix(target: str) -> dict[str, Any]:
     title = f"Fix: {r.get('title') or (issue or {}).get('title') or 'issue found by imagent'}"[:120]
     made = await asyncio.to_thread(github.create_fix_branch, gh, base_sha=head, branch_name=branch, files=new,
                                    message=f"{title}\n\n{r.get('summary', '')}\n\nDiagnosed by imagent.")
-    pr = await asyncio.to_thread(github.open_pr, gh, head=made["branch"], base=base, title=title, body=_pr_body(r, issue))
+    try:
+        from . import fix_chat
+        discussion = fix_chat.pr_section(await fix_chat.messages(target, d["created_at"]))
+        pr = await asyncio.to_thread(github.open_pr, gh, head=made["branch"], base=base, title=title,
+                                     body=_pr_body(r, issue, discussion))
+    except Exception as exc:  # noqa: BLE001 — the branch exists; say where, so a retry isn't a mystery duplicate
+        raise github.WriteError(f"The fix was committed to branch {made['branch']} ({made['url']}) but opening the PR "
+                                f"failed: {github.explain(exc)} — open the PR from that branch on GitHub.") from exc
     out = made | {"base": base, "pr_number": pr["number"], "pr_url": pr["url"], "draft": pr["draft"], "at": _now().isoformat()}
     await _save(target, d["project"], "done", result=r | {"fix_branch": out}, note=d["note"],
                 created_at=d["created_at"])

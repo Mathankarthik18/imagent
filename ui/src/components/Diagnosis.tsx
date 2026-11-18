@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, apiPost, type Diagnosis, type DiagnosisResult, type FixBranch, type FixChange, type JudgeStatus } from "../lib/api";
+import { api, apiPost, type Diagnosis, type DiagnosisResult, type FixBranch, type FixChange, type FixChat as FixChatData, type JudgeStatus } from "../lib/api";
 import { fmtCost } from "../lib/format";
 import { pp } from "../lib/project";
 import { useAppState } from "../lib/state";
@@ -10,7 +10,7 @@ import { Markdown } from "./Markdown";
 import { Time } from "./Time";
 import { controlCls } from "./ui";
 
-const CATEGORY: Record<string, string> = {
+export const CATEGORY: Record<string, string> = {
   tool_error: "Tool error", code_bug: "Code bug", prompt: "Prompt", model: "Model", config: "Configuration",
   external: "External service", loop: "Loop", other: "Other",
 };
@@ -95,21 +95,21 @@ function DiagnosisView({ r, note, onAgain, compact, fixPath, queryKey }: {
           <button onClick={onAgain} className="ml-auto text-ink-3 hover:text-ink">Diagnose again</button>
         </div>
         {r.title && <div className="text-[14px] font-semibold text-ink">{r.title}</div>}
-        <p className="mt-1 text-[13px] leading-5 text-ink-2">{r.summary}</p>
+        <p className="mt-1 max-w-[80ch] text-[13px] leading-5 text-ink-2">{r.summary}</p>
         {note && <p className="mt-2 text-[12px] text-ink-3">You noted: “{note}”</p>}
       </div>
 
       <Block title="Root cause">
-        <Markdown text={r.root_cause} className="text-[13px]" />
+        <Markdown text={r.root_cause} className="max-w-[80ch] text-[13px]" />
         {r.evidence.length > 0 && (
-          <ul className="mt-3 space-y-1 border-t border-line/70 pt-3 text-[12.5px] text-ink-2">
+          <ul className="mt-3 max-w-[80ch] space-y-1 border-t border-line/70 pt-3 text-[12.5px] text-ink-2">
             {r.evidence.map((e, i) => <li key={i} className="flex gap-2"><span className="text-ink-3">•</span><span>{e}</span></li>)}
           </ul>
         )}
       </Block>
 
-      <Block title="Suggested fix">
-        {r.fix.explanation ? <Markdown text={r.fix.explanation} className="text-[13px]" />
+      <Block title={r.fix_from ? "Suggested fix · revised in discussion" : "Suggested fix"}>
+        {r.fix.explanation ? <Explanation text={r.fix.explanation} />
           : r.fix.changes.length === 0 && (
             <p className="text-[12.5px] text-ink-3">
               No fix proposed — the model couldn't pin down the cause with enough certainty
@@ -126,7 +126,9 @@ function DiagnosisView({ r, note, onAgain, compact, fixPath, queryKey }: {
         {r.code_error && <p className="mt-3 text-[12px] text-critical">{r.code_error}</p>}
       </Block>
 
-      {r.verify && <Block title="How to check the fix"><Markdown text={r.verify} className="text-[13px]" /></Block>}
+      <Block title="Discuss this fix"><FixChat r={r} chatPath={fixPath.replace(/fix$/, "chat")} queryKey={queryKey} /></Block>
+
+      {r.verify && <Block title="How to check the fix"><Markdown text={r.verify} className="max-w-[80ch] text-[13px]" /></Block>}
 
       <div className={`flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] text-ink-3 ${compact ? "" : "px-1"}`}>
         {r.repo && <span>Code: <span className="font-mono">{r.repo.repo}@{r.repo.branch} {r.repo.commit}</span></span>}
@@ -139,14 +141,17 @@ function DiagnosisView({ r, note, onAgain, compact, fixPath, queryKey }: {
   );
 }
 
-function DiffView({ change, repo }: { change: FixChange; repo: DiagnosisResult["repo"] }) {
+export function DiffView({ change, repo }: { change: FixChange; repo: DiagnosisResult["repo"] }) {
   const [copied, setCopied] = useState(false);
   const href = repo ? `https://github.com/${repo.repo}/blob/${repo.branch}/${change.path}` : "";
+  const rows = diffRows(change.diff);
+  const added = rows.filter((r) => r.kind === "add").length, removed = rows.filter((r) => r.kind === "del").length;
   return (
     <div className="mt-3 overflow-hidden rounded-md border border-line">
       <div className="flex items-center gap-2 border-b border-line bg-subtle px-3 py-1.5 text-[12px]">
         {href ? <a href={href} target="_blank" rel="noreferrer" className="truncate font-mono text-ink hover:underline">{change.path}</a>
           : <span className="truncate font-mono text-ink">{change.path}</span>}
+        <span className="shrink-0 font-mono text-[11px]"><span className="text-good">+{added}</span> <span className="text-critical">−{removed}</span></span>
         {change.applies === true && <span className="shrink-0 text-good">applies cleanly</span>}
         {change.applies === false && <span className="shrink-0 text-ink-3" title={change.problem || "Some lines differ from the file as read — check before applying"}>needs adjusting</span>}
         <button onClick={() => { navigator.clipboard.writeText(change.diff); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
@@ -154,19 +159,89 @@ function DiffView({ change, repo }: { change: FixChange; repo: DiagnosisResult["
           {copied ? <Icon.check size={12} /> : <Icon.copy size={12} />} {copied ? "Copied" : "Copy diff"}
         </button>
       </div>
-      <pre className="max-h-[420px] overflow-auto py-1.5 font-mono text-[11.5px] leading-[18px]">
-        {change.diff.split("\n").map((l, i) => (
-          <div key={i} className={`px-3 ${l.startsWith("+") && !l.startsWith("+++") ? "bg-good/10 text-good"
-            : l.startsWith("-") && !l.startsWith("---") ? "bg-critical/10 text-critical"
-            : l.startsWith("@@") ? "text-ink-3" : "text-ink-2"}`}>{l || " "}</div>
+      {change.applies === false && change.problem && (
+        <div className="border-b border-line bg-critical/5 px-3 py-1.5 text-[12px] text-ink-2">{change.problem}</div>
+      )}
+      <div className="max-h-[560px] overflow-y-auto py-1.5 font-mono text-[11.5px] leading-[18px]">
+        {rows.map((r, i) => r.kind === "hunk" ? (
+          <div key={i} className="mt-1 bg-subtle/60 px-3 py-0.5 text-ink-3 first:mt-0">{r.text}</div>
+        ) : (
+          <div key={i} className={`grid grid-cols-[1.5rem_minmax(0,1fr)] ${r.kind === "add" ? "bg-good/10" : r.kind === "del" ? "bg-critical/10" : ""}`}>
+            <span className={`select-none text-center ${r.kind === "add" ? "text-good" : r.kind === "del" ? "text-critical" : "text-ink-3/60"}`}>
+              {r.kind === "add" ? "+" : r.kind === "del" ? "−" : ""}
+            </span>
+            <span className={`whitespace-pre-wrap break-words pr-3 ${r.kind === "add" ? "text-good" : r.kind === "del" ? "text-critical" : "text-ink-2"}`}>
+              {r.parts ? <>{r.parts[0]}<mark className={`rounded-sm text-inherit ${r.kind === "add" ? "bg-good/30" : "bg-critical/30"}`}>{r.parts[1]}</mark>{r.parts[2]}</> : r.text || " "}
+            </span>
+          </div>
         ))}
-      </pre>
+      </div>
+    </div>
+  );
+}
+
+type DiffRow = { kind: "add" | "del" | "ctx" | "hunk"; text: string; parts?: [string, string, string] };
+
+/** Diff lines to rows; a removed line paired with its replacement highlights just the words that changed. */
+function diffRows(diff: string): DiffRow[] {
+  const kindOf = (l: string): DiffRow["kind"] | "file" =>
+    l.startsWith("+++") || l.startsWith("---") ? "file" : l.startsWith("@@") ? "hunk"
+      : l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : "ctx";
+  const lines = diff.replace(/\n$/, "").split("\n");
+  const rows: DiffRow[] = [];
+  for (let i = 0; i < lines.length;) {
+    const k = kindOf(lines[i]);
+    if (k === "file") { i++; continue; }
+    if (k !== "del") { rows.push({ kind: k, text: k === "hunk" ? lines[i] : lines[i].slice(1) }); i++; continue; }
+    const dels: string[] = [], adds: string[] = [];
+    while (i < lines.length && kindOf(lines[i]) === "del") dels.push(lines[i++].slice(1));
+    while (i < lines.length && kindOf(lines[i]) === "add") adds.push(lines[i++].slice(1));
+    const paired = dels.length === adds.length ? dels.map((d, n) => changed(d, adds[n])) : null;
+    dels.forEach((d, n) => rows.push({ kind: "del", text: d, parts: paired?.[n]?.[0] }));
+    adds.forEach((a, n) => rows.push({ kind: "add", text: a, parts: paired?.[n]?.[1] }));
+  }
+  return rows;
+}
+
+/** Split two lines into same-prefix / changed middle / same-suffix, snapped to word edges. */
+function changed(a: string, b: string): [[string, string, string], [string, string, string]] | undefined {
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let q = 0;
+  while (q < a.length - p && q < b.length - p && a[a.length - 1 - q] === b[b.length - 1 - q]) q++;
+  while (p > 0 && /\w/.test(a[p - 1])) p--;
+  while (q > 0 && /\w/.test(a[a.length - q])) q--;
+  if (a.length - p - q > a.length * 0.8 && b.length - p - q > b.length * 0.8) return undefined; // mostly rewritten: no highlight
+  const cut = (s: string): [string, string, string] => [s.slice(0, p), s.slice(p, s.length - q), s.slice(s.length - q)];
+  return [cut(a), cut(b)];
+}
+
+/** A fix explanation as its first sentence + the reasoning after it. */
+export function splitLead(text: string): [string, string] {
+  const t = text.trim();
+  const m = /^([\s\S]{20,320}?[.!?])(\s+|$)/.exec(t);
+  const lead = m ? m[1] : t;
+  return [lead, t.slice(lead.length).trim()];
+}
+
+/** The fix's first sentence up front; the reasoning behind it folded away when it's long. */
+function Explanation({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const [lead, rest] = splitLead(text);
+  if (rest.length < 160) return <Markdown text={text} className="max-w-[80ch] text-[13px]" />;
+  return (
+    <div className="max-w-[80ch]">
+      <Markdown text={lead} className="text-[13.5px] font-medium text-ink" />
+      {open && <Markdown text={rest} className="mt-2 text-[13px] text-ink-2" />}
+      <button onClick={() => setOpen(!open)} className="mt-1.5 text-[12px] text-ink-3 hover:text-ink">
+        {open ? "Hide reasoning" : "Why this fix"}
+      </button>
     </div>
   );
 }
 
 /** Commit the fix to a new branch and open a draft PR — after a confirm, on the latest code. */
-function CreateFix({ r, fixPath, queryKey, onAgain }: { r: DiagnosisResult; fixPath: string; queryKey: unknown[]; onAgain: () => void }) {
+export function CreateFix({ r, fixPath, queryKey, onAgain, bare = false }: { r: DiagnosisResult; fixPath: string; queryKey: unknown[]; onAgain: () => void; bare?: boolean }) {
   const qc = useQueryClient();
   const make = useMutation({
     mutationFn: () => apiPost<FixBranch>(fixPath, {}),
@@ -177,7 +252,7 @@ function CreateFix({ r, fixPath, queryKey, onAgain }: { r: DiagnosisResult; fixP
   const files = [...new Set(r.fix.changes.filter((c) => c.edits?.length).map((c) => c.path))];
   if (done) {
     return (
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-good/40 bg-good/5 px-3 py-2 text-[12.5px]">
+      <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-good/40 bg-good/5 px-3 py-2 text-[12.5px] ${bare ? "" : "mt-3"}`}>
         <Icon.check size={13} className="text-good" />
         <a href={done.pr_url} target="_blank" rel="noreferrer" className="font-medium text-ink hover:underline">
           {done.draft ? "Draft PR" : "PR"} #{done.pr_number} opened
@@ -189,7 +264,7 @@ function CreateFix({ r, fixPath, queryKey, onAgain }: { r: DiagnosisResult; fixP
   }
   const stale = make.error instanceof Error && /changed since this diagnosis/.test(make.error.message);
   return (
-    <div className="mt-3 rounded-md border border-line px-3 py-2.5">
+    <div className={bare ? "" : "mt-3 rounded-md border border-line px-3 py-2.5"}>
       <div className="flex flex-wrap items-center gap-2">
         <button disabled={!clean || make.isPending}
           onClick={() => { if (confirm(`Create a branch in ${r.repo!.repo} with this fix (${files.join(", ")}) and open a draft pull request?`)) make.mutate(); }}
@@ -211,7 +286,150 @@ function CreateFix({ r, fixPath, queryKey, onAgain }: { r: DiagnosisResult; fixP
   );
 }
 
-function Block({ title, children }: { title: string; children: React.ReactNode }) {
+const STARTERS = ["Why is this the root cause?", "Is there a simpler or safer fix?", "What could this fix break?"];
+
+/** Talk the diagnosis through with the model; adopt a revised fix it proposes. Saved on the issue/run. */
+export function FixChat({ r, chatPath, queryKey, variant = "inline" }: {
+  r: DiagnosisResult; chatPath: string; queryKey: unknown[]; variant?: "inline" | "side";
+}) {
+  const qc = useQueryClient();
+  const [text, setText] = useState("");
+  const scroller = useRef<HTMLDivElement>(null);
+  const chatKey = ["fix-chat", chatPath];
+  const chat = useQuery({
+    queryKey: chatKey, queryFn: () => api<FixChatData>(chatPath),
+    refetchInterval: (q) => (q.state.data?.thinking ? 2500 : false),
+  });
+  const send = useMutation({
+    mutationFn: (message: string) => apiPost(chatPath, { message }),
+    onSuccess: () => { setText(""); qc.invalidateQueries({ queryKey: chatKey }); },
+  });
+  const adopt = useMutation({
+    mutationFn: (id: string) => apiPost(`${chatPath}/${id}/adopt`, {}),
+    onSuccess: () => { qc.invalidateQueries({ queryKey }); qc.invalidateQueries({ queryKey: chatKey }); },
+  });
+  const msgs = chat.data?.messages ?? [];
+  const thinking = chat.data?.thinking || send.isPending;
+  const submit = (m = text) => { if (m.trim() && !thinking) send.mutate(m.trim()); };
+  const side = variant === "side";
+  useEffect(() => {
+    const el = scroller.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [msgs.length, thinking]);
+  const where = chatPath.includes("/issues/") ? "issue" : "run";
+
+  const body = (
+    <>
+      {msgs.length === 0 && !thinking && (
+        <div className={`text-[12.5px] leading-5 text-ink-3 ${side ? "px-4 py-4" : "px-4 pt-3"}`}>
+          Ask about the diagnosis, push back, or say what the fix should do differently. If the fix should change,
+          you'll get a new version to use.
+          <div className={`mt-3 flex gap-1.5 ${side ? "flex-col items-start" : "flex-wrap"}`}>
+            {STARTERS.map((s) => (
+              <button key={s} onClick={() => submit(s)}
+                className="rounded-full border border-line px-2.5 py-1 text-left text-[12px] text-ink-2 hover:border-line-strong hover:text-ink">{s}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {msgs.length > 0 && (
+        <div className={side ? "space-y-4 px-4 py-4" : "divide-y divide-line/70"}>
+          {msgs.map((m) => side ? (
+            m.role === "user" ? (
+              <div key={m.id} className="ml-8 rounded-lg rounded-br-sm bg-subtle px-3 py-2">
+                <p className="whitespace-pre-wrap text-[13px] leading-5 text-ink">{m.content}</p>
+              </div>
+            ) : (
+              <div key={m.id}>
+                <div className="mb-1 flex items-center gap-1.5 text-[11px] text-ink-3">
+                  <span className={`font-medium ${m.role === "error" ? "text-critical" : "text-accent"}`}>imagent</span>
+                  <Time value={m.at} />{m.role === "assistant" && m.cost > 0 && <span>· {fmtCost(m.cost)}</span>}
+                </div>
+                {m.role === "error" ? <p className="text-[12.5px] text-critical">{m.content}</p>
+                  : <Markdown text={m.content} className="text-[13px]" />}
+                {m.fix && <ProposedFix m={m} r={r} onUse={() => adopt.mutate(m.id)} busy={adopt.isPending} />}
+              </div>
+            )
+          ) : (
+            <div key={m.id} className="px-4 py-3">
+              <div className="mb-1 flex items-center gap-2 text-[11.5px] text-ink-3">
+                <span className={`font-medium ${m.role === "user" ? "text-ink-2" : m.role === "error" ? "text-critical" : "text-accent"}`}>
+                  {m.role === "user" ? "You" : "imagent"}
+                </span>
+                <Time value={m.at} />
+                {m.role === "assistant" && m.cost > 0 && <span>· {fmtCost(m.cost)}</span>}
+              </div>
+              {m.role === "user" ? <p className="max-w-[80ch] whitespace-pre-wrap text-[13px] text-ink">{m.content}</p>
+                : m.role === "error" ? <p className="text-[12.5px] text-critical">{m.content}</p>
+                : <Markdown text={m.content} className="max-w-[80ch] text-[13px]" />}
+              {m.fix && <ProposedFix m={m} r={r} onUse={() => adopt.mutate(m.id)} busy={adopt.isPending} />}
+            </div>
+          ))}
+        </div>
+      )}
+      {thinking && (
+        <div className={`flex items-center gap-2 px-4 py-3 text-[12.5px] text-ink-3 ${side ? "" : "border-t border-line/70"}`}>
+          <span className="size-3 animate-spin rounded-full border-2 border-line border-t-accent" /> Reading the run and the code…
+        </div>
+      )}
+    </>
+  );
+
+  const composer = (
+    <div className="border-t border-line p-3">
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={side ? 3 : 2} disabled={thinking}
+        onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
+        placeholder={side ? "Ask about this fix…" : "e.g. “the tool is also called from the chat path — does the fix cover it?”"}
+        className={`${controlCls} w-full resize-none py-2 leading-5`} />
+      <div className="mt-2 flex items-center gap-2">
+        <span className="text-[11px] text-ink-3">⌘↵ to send{side ? "" : ` · uses this project's AI model · saved on this ${where}`}</span>
+        <button onClick={() => submit()} disabled={!text.trim() || thinking}
+          className="ml-auto inline-flex h-7 items-center rounded-md bg-ink px-3 text-[12.5px] font-medium text-bg disabled:opacity-40">Send</button>
+      </div>
+      {(send.isError || adopt.isError) && (
+        <p className="mt-2 text-[12.5px] text-critical">{((send.error || adopt.error) as Error).message}</p>
+      )}
+    </div>
+  );
+
+  if (!side) return <div className="rounded-lg border border-line">{body}{composer}</div>;
+  return (
+    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-bg">
+      <div className="flex items-start gap-2.5 border-b border-line px-4 py-3">
+        <span className="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent"><Icon.issues size={13} /></span>
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-ink">Ask imagent</div>
+          <div className="text-[11.5px] text-ink-3">Knows this run, the diagnosis and the code · saved on this {where}</div>
+        </div>
+      </div>
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">{body}</div>
+      {composer}
+    </div>
+  );
+}
+
+function ProposedFix({ m, r, onUse, busy }: { m: { id: string; fix: FixChatData["messages"][number]["fix"] }; r: DiagnosisResult; onUse: () => void; busy: boolean }) {
+  const fix = m.fix!;
+  const inUse = r.fix_from?.message === m.id;
+  const clean = fix.changes.length > 0 && fix.changes.every((c) => c.applies !== false);
+  return (
+    <div className={`mt-3 rounded-md border px-3 py-2.5 ${inUse ? "border-good/50 bg-good/5" : "border-accent/40 bg-accent/5"}`}>
+      <div className="flex flex-wrap items-center gap-2 text-[12px]">
+        <span className="font-medium text-ink">Revised fix</span>
+        {inUse ? <span className="inline-flex items-center gap-1 text-good"><Icon.check size={12} /> In use — Create fix branch commits this version</span>
+          : r.fix_branch ? <span className="text-ink-3">A PR is already open for the earlier fix</span>
+          : <button onClick={onUse} disabled={!clean || busy}
+              title={clean ? "Replace the suggested fix with this version" : "Some edits don't match the current code — ask it to redo them"}
+              className="ml-auto inline-flex h-6 items-center rounded-md bg-ink px-2.5 text-[12px] font-medium text-bg disabled:opacity-40">
+              {busy ? "Using…" : "Use this version"}</button>}
+      </div>
+      {fix.explanation && <Markdown text={fix.explanation} className="mt-1 max-w-[80ch] text-[12.5px] text-ink-2" />}
+      {fix.changes.map((c, i) => <DiffView key={i} change={c} repo={r.repo} />)}
+    </div>
+  );
+}
+
+export function Block({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section>
       <h3 className="mb-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-3">{title}</h3>
