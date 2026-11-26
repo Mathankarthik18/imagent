@@ -119,7 +119,35 @@ def _parse(text: str) -> dict[str, Any]:
             continue
         if isinstance(d, dict) and "better" in d:
             return d
+    lenient = _parse_lenient(text)
+    if lenient:
+        return lenient
     raise ValueError(f"judge reply has no verdict JSON: {text[:200]}")
+
+
+def _parse_lenient(text: str) -> dict[str, Any] | None:
+    """A verdict from a reply that is almost JSON — models often quote code inside "reason"
+    without escaping it (`{"email_type": "general"}`), which breaks the whole object. The verdict
+    and the scores are simple values, so read them directly and take the reason up to the next key."""
+    better = re.findall(r'"better"\s*:\s*"(X|Y|tie)"', text)
+    if not better:
+        return None
+    out: dict[str, Any] = {"better": better[-1]}
+    start = text.rfind('"better"')
+    rest = text[start:]
+    m = re.search(r'"reason"\s*:\s*"(.*?)"\s*,\s*"scores"', rest, re.S) or re.search(r'"reason"\s*:\s*"(.*?)"\s*}\s*$', rest.strip(), re.S)
+    if m:
+        out["reason"] = m.group(1).replace('\\"', '"').strip()
+    i = rest.find('"scores"')
+    if i >= 0:
+        j = rest.find("{", i)
+        try:
+            scores, _ = json.JSONDecoder().raw_decode(rest[j:])
+            if isinstance(scores, dict):
+                out["scores"] = scores
+        except ValueError:
+            pass
+    return out
 
 
 def _question(spans: list[dict[str, Any]]) -> str:
