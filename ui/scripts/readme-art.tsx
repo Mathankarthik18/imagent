@@ -9,7 +9,8 @@ import { Icon, KindIcon } from "../src/components/icons";
 const out = process.argv[2];
 mkdirSync(`${out}/icons`, { recursive: true });
 
-const EMBER = "#FF5B2E", INK = "#121212", PAPER = "#F5F5F2", MUTED = "#8C8A86";
+// Light theme (README renders on GitHub's light page by default).
+const EMBER = "#FF5B2E", INK = "#121212", PAPER = "#FAFAF7", MUTED = "#6B6964", CARD = "#FFFFFF", TINT = "#FFF1EB";
 const inner = (html: string) => html.replace(/^<span[^>]*>/, "").replace(/<\/span>$/, "").replace(/^<svg[^>]*>/, "").replace(/<\/svg>$/, "");
 const kind = (k: string, color: string) => inner(renderToStaticMarkup(<KindIcon kind={k} size={24} />))
   .replace(/var\(--icon-node, currentColor\)/g, color).replace(/currentColor/g, color);
@@ -40,48 +41,59 @@ const T = (x: number, y: number, t: string, s: number, f: string, w = 400, famil
 
 // ── banner ──
 const W = 1280, H = 640;
-let b = `<rect width="${W}" height="${H}" fill="${INK}"/>`;
+let b = `<rect width="${W}" height="${H}" fill="${PAPER}"/>`;
 // faint grid, the icon grid scaled up
-for (let x = 0; x <= W; x += 32) b += `<path d="M${x} 0V${H}" stroke="#ffffff" stroke-opacity="0.035"/>`;
-for (let y = 0; y <= H; y += 32) b += `<path d="M0 ${y}H${W}" stroke="#ffffff" stroke-opacity="0.035"/>`;
-b += mark(96, 176, 92, PAPER);
-b += wordmark(214, 210, 3.9, PAPER);
-b += T(98, 350, "Self-hosted observability", 36, PAPER, 500);
-b += T(98, 394, "for AI agents.", 36, PAPER, 500);
-b += T(98, 440, "Traces, blueprints and model experiments", 20, MUTED);
-b += T(98, 468, "for LangChain &amp; LangGraph — no trace limits.", 20, MUTED);
-const chips = ["OpenTelemetry", "ClickHouse", "LangGraph", "MIT"];
+for (let x = 0; x <= W; x += 32) b += `<path d="M${x} 0V${H}" stroke="#000000" stroke-opacity="0.045"/>`;
+for (let y = 0; y <= H; y += 32) b += `<path d="M0 ${y}H${W}" stroke="#000000" stroke-opacity="0.045"/>`;
+b += mark(96, 150, 92, INK);
+b += wordmark(214, 184, 3.9, INK);
+b += T(98, 318, "Observability for AI agents.", 38, INK, 600);
+b += T(98, 364, "See every run. Find what broke. Fix it.", 30, EMBER, 500);
+b += T(98, 418, "Traces · an issue engine that reads your runs ·", 20, MUTED);
+b += T(98, 446, "AI diagnosis &amp; fix PRs · model experiments.", 20, MUTED);
+const chips = ["Self-hosted", "One line of code", "OpenTelemetry", "MIT"];
 let cx = 98;
-for (const c of chips) { const w = c.length * 9.6 + 28; b += `<rect x="${cx}" y="510" width="${w}" height="34" rx="17" fill="none" stroke="#ffffff" stroke-opacity="0.18"/>` + T(cx + 14, 532, c, 15, "#D9D7D2", 500); cx += w + 10; }
+for (const c of chips) { const w = c.length * 9.4 + 28; b += `<rect x="${cx}" y="492" width="${w}" height="34" rx="17" fill="${CARD}" stroke="#000000" stroke-opacity="0.14"/>` + T(cx + 14, 514, c, 15, "#2A2926", 500); cx += w + 10; }
 
 // a trace, drawn in the icon language: name column, then a waterfall of when each span ran
 const rows: [string, string, string, number, number, number][] = [
   // kind, colour, name, indent, start, width (on a 0–220 timeline)
-  ["agent", "#FF6B3D", "orchestrator", 0, 0, 220], ["llm", "#4CC79A", "claude-sonnet", 14, 4, 46],
-  ["subagent", "#B8B0F2", "noon_report", 14, 54, 140], ["llm", "#4CC79A", "glm-5.3-flash", 28, 58, 40],
-  ["tool", "#7AA7F0", "list_vessels", 28, 100, 14], ["tool", "#7AA7F0", "noon_reports", 28, 116, 56],
+  ["agent", "#E8501F", "orchestrator", 0, 0, 220], ["llm", "#1F9D6B", "claude-sonnet", 14, 4, 46],
+  ["subagent", "#7B6FD6", "noon_report", 14, 54, 140], ["llm", "#1F9D6B", "glm-5.3-flash", 28, 58, 40],
+  ["tool", "#3D7BD9", "list_vessels", 28, 100, 14], ["tool", "#C8304E", "noon_reports", 28, 116, 56],
   ["framework", "#8C8A86", "summarize", 14, 198, 18],
 ];
-const ox = 818, oy = 150, col = 168;
-b += `<rect x="${ox - 28}" y="${oy - 44}" width="${col + 276}" height="${rows.length * 44 + 70}" rx="20" fill="#1A1A19" stroke="#ffffff" stroke-opacity="0.08"/>`;
+const ox = 818, oy = 140, col = 168;
+const iy = oy + 14 + rows.length * 44 + 22;  // where the issue line sits, under the waterfall
+b += `<rect x="${ox - 28}" y="${oy - 44}" width="${col + 276}" height="${iy + 62 - (oy - 44)}" rx="20" fill="${CARD}" stroke="#000000" stroke-opacity="0.10"/>`;
 b += T(ox - 6, oy - 12, "trace · 9 spans · 2.3s", 13, MUTED, 500, "Menlo");
 rows.forEach(([k, color, name, indent, start, width], i) => {
   const y = oy + 14 + i * 44;
   b += g24(kind(k, color), ox + indent, y, 20, color);
-  b += T(ox + 28 + indent, y + 15, name, 13.5, "#E8E6E1", 400, "Menlo");
-  b += `<rect x="${ox + col + start}" y="${y + 5}" width="${width}" height="10" rx="2" fill="${color}" fill-opacity="${i === 0 ? 0.9 : 0.78}"/>`;
+  b += T(ox + 28 + indent, y + 15, name, 13.5, "#2A2926", 400, "Menlo");
+  b += `<rect x="${ox + col + start}" y="${y + 5}" width="${width}" height="10" rx="2" fill="${color}" fill-opacity="${i === 0 ? 0.9 : 0.8}"/>`;
 });
+// the issue it turned into
+b += `<path d="M${ox - 28} ${iy - 12}H${ox + col + 248}" stroke="#000000" stroke-opacity="0.08"/>`;
+b += `<rect x="${ox - 6}" y="${iy + 4}" width="8" height="8" rx="4" fill="#C8304E"/>`;
+b += T(ox + 10, iy + 13, "Issue · noon_reports times out on bad IMO", 13.5, INK, 600);
+b += T(ox + 10, iy + 36, "Root cause found · fix PR ready", 13, "#1F9D6B", 500);
 writeFileSync(`${out}/banner.svg`, `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${b}</svg>`);
 
-// ── feature icons for the README (ember node on ink tile; work on light and dark GitHub) ──
+// ── feature icons for the README (ink line, ember node, on a soft ember tile; light theme) ──
 const tile = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 56 56">
-  <rect width="56" height="56" rx="14" fill="${INK}"/>${g24(body, 14, 14, 28, PAPER)}</svg>`;
+  <rect x="0.5" y="0.5" width="55" height="55" rx="14" fill="${TINT}" stroke="${EMBER}" stroke-opacity="0.22"/>${g24(body, 14, 14, 28, INK)}</svg>`;
+const node = (x: number, y: number) => `<rect x="${x}" y="${y}" width="2.5" height="2.5" fill="${EMBER}" stroke="none"/>`;
 const features: Record<string, string> = {
-  traces: ui("traces", PAPER, EMBER), blueprint: ui("blueprint", PAPER, EMBER), experiments: ui("experiments", PAPER, EMBER),
-  judge: ui("check", PAPER), projects: ui("projects", PAPER, EMBER), live: ui("clock", PAPER, EMBER),
-  agent: kind("agent", PAPER).replace(/fill="#F5F5F2" stroke="none"/g, `fill="${EMBER}" stroke="none"`),
-  tool: kind("tool", PAPER).replace(/fill="#F5F5F2" stroke="none"/g, `fill="${EMBER}" stroke="none"`),
-  llm: kind("llm", PAPER).replace(/fill="#F5F5F2" stroke="none"/g, `fill="${EMBER}" stroke="none"`),
+  traces: ui("traces", INK, EMBER), blueprint: ui("blueprint", INK, EMBER), experiments: ui("experiments", INK, EMBER),
+  issues: ui("issues", INK, EMBER), judge: ui("check", INK), projects: ui("projects", INK, EMBER), live: ui("clock", INK, EMBER),
+  // a branch: the fix goes onto its own branch
+  fix: `<path d="M6.25 4V20M6.25 15.5C6.25 11.5 17.75 12.5 17.75 8.5V6.75M4.5 20H8M16 4.25H19.5"/>${node(16.5, 3)}`,
+  // a speech bubble: ask about the fix
+  chat: `<path d="M4 5H20V15.5H11.5L7.5 19.25V15.5H4Z"/>${node(10.75, 9)}`,
+  agent: kind("agent", INK).replace(/fill="#121212" stroke="none"/g, `fill="${EMBER}" stroke="none"`),
+  tool: kind("tool", INK).replace(/fill="#121212" stroke="none"/g, `fill="${EMBER}" stroke="none"`),
+  llm: kind("llm", INK).replace(/fill="#121212" stroke="none"/g, `fill="${EMBER}" stroke="none"`),
 };
 for (const [n, body] of Object.entries(features)) writeFileSync(`${out}/icons/${n}.svg`, tile(body));
 console.log("written");
