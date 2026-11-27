@@ -134,11 +134,20 @@ def _readable(col: str, roles: tuple[str, ...]) -> str:
         {col}), '\\s+', ' ')), 1, 400)"""
 
 
+def _preview(col: str) -> str:
+    """A payload cut to the preview size keeping a little of the start and most of the END —
+    a run's final answer (and a chat's latest user message) come last."""
+    return (f"if(length({col}) <= {{preview:UInt32}}, {col}, concat("
+            f"substring({col}, 1, intDiv({{preview:UInt32}}, 5)), "
+            f"'…[truncated ', toString(length({col}) - {{preview:UInt32}}), ' chars]…', "
+            f"substring({col}, length({col}) - ({{preview:UInt32}} - intDiv({{preview:UInt32}}, 5)) + 1)))")
+
+
 _TRACE_TEXT = f"""
     {_readable('input', ('user', 'human'))} AS input_text,
     {_readable('output', ('assistant', 'ai'))} AS output_text,
-    substring(input, 1, {{preview:UInt32}}) AS input_preview,
-    substring(output, 1, {{preview:UInt32}}) AS output_preview
+    {_preview('input')} AS input_preview,
+    {_preview('output')} AS output_preview
 """
 
 

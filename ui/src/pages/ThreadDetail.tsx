@@ -168,7 +168,8 @@ function Message({ who, turn }: { who: "in" | "out"; turn: Turn }) {
     <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-3">
       <span className={`pt-px text-[12px] ${who === "in" ? "text-ink" : "text-[#0f8a5f] dark:text-[#4cc79a]"}`}>{label}</span>
       <div>
-        {!turn.text ? <span className="text-ink-3">Not captured</span>
+        {turn.note ? <span className="text-[12.5px] text-ink-3">{turn.note}</span>
+          : !turn.text ? <span className="text-ink-3">Not captured</span>
           : turn.isMessage ? <CollapsibleMarkdown text={turn.text} maxHeight={320} />
           : <>
               <pre className="whitespace-pre-wrap break-words font-mono text-[12px] text-ink-2">{text}</pre>

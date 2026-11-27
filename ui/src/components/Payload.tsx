@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { lastAssistantText } from "../lib/conversation";
 import { CollapsibleMarkdown } from "./Markdown";
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -96,6 +97,8 @@ export function PayloadView({ raw, empty = "Not captured" }: { raw: string; empt
   const { json, text } = parsePayload(raw);
   if (!raw) return <p className="text-ink-3">{empty}</p>;
   const messages = asMessages(json);
+  // Truncated run state (not valid JSON): show its final answer, not the raw text.
+  const finalAnswer = json === undefined && /"messages"\s*:/.test(text.slice(0, 200)) ? lastAssistantText(text) : "";
   return (
     <div>
       <div className="-mt-7 mb-2 flex justify-end gap-3 text-[11.5px] text-ink-3">
@@ -107,6 +110,15 @@ export function PayloadView({ raw, empty = "Not captured" }: { raw: string; empt
           {json !== undefined ? JSON.stringify(json, null, 2) : text}
         </pre>
       ) : messages ? <MessageList messages={messages} />
+        : finalAnswer ? (
+          <div className="rounded-md border border-line px-3 py-2.5">
+            <div className="mb-1 flex items-center gap-2 text-[11.5px]">
+              <span className={`font-medium ${ROLE_STYLE.assistant}`}>Final answer</span>
+              <span className="text-ink-3">· the full output is long and was trimmed — Raw JSON shows what was kept</span>
+            </div>
+            <Text text={finalAnswer} />
+          </div>
+        )
         : json !== undefined && typeof json === "string" ? <Text text={json} />
         : json !== undefined ? <JsonTree value={json} defaultOpen={2} />
         : <Text text={text} />}
