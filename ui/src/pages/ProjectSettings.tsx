@@ -502,7 +502,7 @@ function EngineSettingsBlock({ project: p, judgeOn, onSaved, go }: {
   project: Project; judgeOn: boolean; onSaved: () => void; go: (s: SectionId) => void;
 }) {
   const meta = useQuery({ queryKey: ["engine-categories"], queryFn: () => api<{ categories: Record<string, EngineCategory>; levels: Record<string, number> }>("/api/engine/categories") });
-  const tools = useQuery({ queryKey: ["project-tools", p.id], queryFn: () => api<{ name: string; calls: number; paused: number }[]>(`/api/projects/${p.id}/tools`) });
+  const tools = useQuery({ queryKey: ["project-tools", p.id], queryFn: () => api<{ name: string; calls: number; paused: number; sends: boolean }[]>(`/api/projects/${p.id}/tools`) });
   const saved = p.engine!;
   const [e, setE] = useState<EngineSettings>(saved);
   const [toolFilter, setToolFilter] = useState("");
@@ -641,6 +641,10 @@ function EngineSettingsBlock({ project: p, judgeOn, onSaved, go }: {
           </Block>
         )}
 
+        {e.categories.includes("leaked_narration") && (
+          <SendTools tools={tools.data ?? []} loading={tools.isPending} e={e} set={set} />
+        )}
+
         {e.categories.includes("context_explosion") && (
           <Block title="Context limits" description="When a run counts as a context explosion.">
             <div className="grid gap-4 sm:grid-cols-2">
@@ -758,6 +762,54 @@ function LearnedPreferences({ project: p, onSaved }: { project: Project; onSaved
       </form>
       {prefs.pending.length > 0 && <p className="mt-2 text-[11.5px] text-ink-3">{prefs.pending.length} reason{prefs.pending.length === 1 ? "" : "s"} waiting to become rules at the next scan.</p>}
       {save.isError && <p className="mt-2 text-[12.5px] text-critical">{(save.error as Error).message}</p>}
+    </Block>
+  );
+}
+
+
+/** Which tools send a message to a person — their text is checked for leaked working notes. */
+function SendTools({ tools, loading, e, set }: {
+  tools: { name: string; calls: number; sends: boolean }[]; loading: boolean; e: EngineSettings; set: (p: Partial<EngineSettings>) => void;
+}) {
+  const [filter, setFilter] = useState("");
+  const [all, setAll] = useState(false);
+  const on = (t: { name: string; sends: boolean }) =>
+    !(e.not_message_tools ?? []).includes(t.name) && (t.sends || (e.message_tools ?? []).includes(t.name));
+  const flip = (t: { name: string; sends: boolean }) => {
+    const add = (l: string[]) => [...new Set([...l, t.name])], drop = (l: string[]) => l.filter((x) => x !== t.name);
+    const msg = e.message_tools ?? [], not = e.not_message_tools ?? [];
+    if (on(t)) set(t.sends ? { not_message_tools: add(not) } : { message_tools: drop(msg) });
+    else set(t.sends ? { not_message_tools: drop(not) } : { message_tools: add(msg) });
+  };
+  const q = filter.trim().toLowerCase();
+  const picked = tools.filter(on).length;
+  const shown = tools.filter((t) => t.name.toLowerCase().includes(q) && (all || q || on(t) || t.sends));
+  return (
+    <Block title="Tools that send messages to people"
+      description="The text these tools send is what a person reads — it's checked for the agent's working notes (“I now have all the data. Let me compose…”) instead of the real message. Picked by name automatically; adjust here."
+      aside={<span className="text-[12px] text-ink-3">{picked} checked</span>}>
+      <div className="overflow-hidden rounded-lg border border-line">
+        <div className="flex items-center gap-2 border-b border-line px-3">
+          <Icon.search size={13} className="shrink-0 text-ink-3" />
+          <input value={filter} onChange={(ev) => setFilter(ev.target.value)} placeholder="Search tools"
+            className="h-8 min-w-0 flex-1 bg-transparent text-[12.5px] outline-none" />
+          <label className="flex shrink-0 items-center gap-1.5 text-[12px] text-ink-3">
+            <input type="checkbox" checked={all} onChange={(ev) => setAll(ev.target.checked)} /> Show all tools
+          </label>
+        </div>
+        <div className="max-h-64 overflow-y-auto">
+          {loading ? <div className="px-3 py-2 text-[12.5px] text-ink-3">Loading tools…</div>
+            : shown.length === 0 ? <div className="px-3 py-2 text-[12.5px] text-ink-3">No sending tools found — tick “Show all tools” to pick one.</div>
+            : shown.map((t) => (
+              <label key={t.name} className="flex cursor-pointer items-center gap-2.5 border-b border-line/50 px-3 py-1.5 text-[12.5px] last:border-b-0 hover:bg-hover">
+                <input type="checkbox" checked={on(t)} onChange={() => flip(t)} />
+                <span className="truncate font-mono text-ink">{t.name}</span>
+                {t.sends && <span className="shrink-0 rounded bg-subtle px-1.5 text-[10.5px] text-ink-3">auto</span>}
+                <span className="ml-auto shrink-0 text-[11.5px] text-ink-3">{t.calls} calls</span>
+              </label>
+            ))}
+        </div>
+      </div>
     </Block>
   );
 }

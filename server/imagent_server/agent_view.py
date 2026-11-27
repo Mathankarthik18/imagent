@@ -101,6 +101,40 @@ def _diagnosis_text(d: dict[str, Any] | None, heading: str = "##") -> str:
     return "\n".join(parts)
 
 
+MAX_CONVO_LINES = 40
+
+
+async def _conversation(root: dict[str, Any], trace_id: str, base: str) -> tuple[int, int, str] | None:
+    """(runs in the thread, this run's position, one line per run) — context, not the whole history."""
+    project, thread = root.get("project", ""), root["thread_id"]
+    runs = await query(f"""
+        SELECT trace_id, start_time, duration_ms, status, left(input, 3000) AS input_head, left(output, 1500) AS output_head
+        FROM {queries.SPANS}
+        WHERE project = {{p:String}} AND thread_id = {{t:String}} AND is_root = 1 AND origin = ''
+        ORDER BY start_time LIMIT 1 BY trace_id LIMIT 500""", {"p": project, "t": thread})
+    if len(runs) < 2:
+        return None
+    failed = {r["trace_id"] for r in await query(f"""
+        SELECT DISTINCT trace_id FROM {queries.SPANS}
+        WHERE project = {{p:String}} AND thread_id = {{t:String}} AND status = 'error'""", {"p": project, "t": thread})}
+    pos = next((n for n, r in enumerate(runs) if r["trace_id"] == trace_id), 0)
+    keep = range(len(runs)) if len(runs) <= MAX_CONVO_LINES else \
+        range(max(0, pos - MAX_CONVO_LINES // 2), min(len(runs), pos + MAX_CONVO_LINES // 2))
+    lines = []
+    if keep.start > 0:
+        lines.append(f"… {keep.start} earlier runs not shown …")
+    for n in keep:
+        r = runs[n]
+        req = " ".join(compare.readable(r["input_head"], roles=("user", "human")).split())[:140]
+        ans = " ".join(compare.readable(r["output_head"]).split())[:140]
+        mark = "  ◀ THIS RUN" if r["trace_id"] == trace_id else ""
+        lines.append(f"{n + 1}. {r['start_time']} · {'FAILED' if r['trace_id'] in failed else 'ok'} · "
+                     f"request: “{req or '—'}” · answer: “{ans or '—'}”{mark}\n   {_link(base, project, 'traces/' + r['trace_id'], agent=True)}")
+    if keep.stop < len(runs):
+        lines.append(f"… {len(runs) - keep.stop} later runs not shown …")
+    return len(runs), pos + 1, "\n".join(lines)
+
+
 async def trace_text(trace_id: str, base: str = "", *, with_issues: bool = True, tool_calls: int = MAX_TOOL_CALLS) -> str | None:
     spans = await queries.get_trace(trace_id)
     if not spans:
@@ -130,6 +164,11 @@ async def trace_text(trace_id: str, base: str = "", *, with_issues: bool = True,
     if models:
         out.append(f"- Models: {', '.join(models)}")
 
+    convo = await _conversation(root, trace_id, base) if root.get("thread_id") else None
+    if convo:
+        out.append(f"- Part of a conversation with {convo[0]} runs — this is run {convo[1]} of {convo[0]}. "
+                   "Fix THIS run; the others are listed under 'The conversation' for context.")
+
     request = compare.readable(root.get("input", ""), roles=("user", "human"))
     out += ["", "## Request", clip(request, TEXT) or "(not captured)",
             "", "## Final answer", clip(diagnose.final_answer(spans, root), TEXT) or "(none — the run failed or was cut off)"]
@@ -155,6 +194,9 @@ async def trace_text(trace_id: str, base: str = "", *, with_issues: bool = True,
             out += ["", f"### {n}. {s['name']} — {_ms(s.get('duration_ms'))}{flag}",
                     "Input:", _block(clip(s.get("input", ""), TOOL_IO)),
                     "Output:", _block(clip(s.get("output", ""), TOOL_IO))]
+
+    if convo:
+        out += ["", f"## The conversation ({convo[0]} runs; this run is marked ◀ THIS RUN)", convo[2]]
 
     if with_issues:
         issues = await _issues_for_trace(trace_id)

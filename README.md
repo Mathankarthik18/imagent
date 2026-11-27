@@ -140,11 +140,11 @@ runs that "succeeded" with a wrong answer. Every few hours (or on **Scan now**) 
 new runs, confirms each suspect against the full run, and groups them into issues by cause.
 
 <details>
-<summary><b>The 15 failure categories, and how a run becomes an issue</b></summary>
+<summary><b>The 16 failure categories, and how a run becomes an issue</b></summary>
 
 | | Categories | How they're found |
 |---|---|---|
-| **Answers** | Hallucination · Task evasion · Missing capability awareness · Feature gap · Response truncation | AI reads the run · truncation is a rule (`finish_reason = length`) |
+| **Answers** | Hallucination · Task evasion · Missing capability awareness · Feature gap · Response truncation · Leaked working notes | AI reads the run · truncation is a rule (`finish_reason = length`) · leaked notes: rule (final answers and the text of messages the agent sends) + AI |
 | **Tools** | Silent tool error · Wrong tool · Incorrect tool args · Failed error recovery | AI, with hints (error-looking tool results are marked) |
 | **Behaviour** | Agent looping · Flawed plan · System prompt drift | Loops: rule + AI · the rest: AI, with the agent's system prompt |
 | **Safety & cost** | Guardrail bypass · PII leak · Context explosion | Rules (unapproved actions, secrets the agent writes, token/size limits) + AI |
@@ -362,7 +362,7 @@ README art (banner and icons) is generated from the app's own brand components:
 - [x] Blueprint from the framework, with live stats
 - [x] Experiments: per-agent model swaps, recorded / live tools
 - [x] AI judge with project rubrics and human review
-- [x] Issue engine: 15 failure categories, screener + investigator, an issue board that learns
+- [x] Issue engine: 16 failure categories, screener + investigator, an issue board that learns
 - [x] Diagnose against your GitHub code, fix branch & draft PR, per-issue checks, fix verification
 - [x] **Ask imagent**: discuss a diagnosis and revise the fix before the PR
 - [ ] Alerts for new high-severity issues (Slack, email)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import uuid
 from typing import Any
 
@@ -53,6 +54,13 @@ CATEGORIES: dict[str, dict[str, str]] = {
         "definition": "The agent doesn't do what was asked although it could: deflects, answers a different "
                       "question, asks for information it already has or doesn't need, or does only part of the task "
                       "and presents it as done.",
+    },
+    "leaked_narration": {
+        "label": "Leaked working notes", "group": "Answers", "how": "rule+model",
+        "definition": "A person receives the agent's working notes instead of the real content: narration about its "
+                      "own process ('I now have all the data', 'Let me compose and send the report…'), plans, or talk "
+                      "about tools and steps — as the final answer or as the text of a message it sends (Signal, "
+                      "email, Slack…). The message the person needed usually never went out.",
     },
     "response_truncation": {
         "label": "Response truncation", "group": "Answers", "how": "rule",
@@ -129,6 +137,23 @@ CATEGORIES: dict[str, dict[str, str]] = {
 }
 
 
+# Tools that send something to a person (their text is what the person reads). Read-style names
+# (get_/list_/search_…) never count, so search_emails or get_messages aren't mistaken for senders.
+_SENDS = re.compile(r"send|reply|notify|post|message|signal|e?mail|slack|sms|whatsapp|telegram|teams|broadcast", re.I)
+_READS = re.compile(r"^(get|list|search|read|fetch|find|lookup|query|load|count|check|draft|resolve|validate|preview|format|parse)_", re.I)
+
+
+def sends_by_name(name: str) -> bool:
+    return bool(_SENDS.search(name)) and not _READS.search(name)
+
+
+def is_message_tool(name: str, es: dict[str, Any]) -> bool:
+    """Does this tool send a message to a person — auto-detected by name, adjusted in Settings."""
+    if name in (es.get("not_message_tools") or []):
+        return False
+    return name in (es.get("message_tools") or []) or sends_by_name(name)
+
+
 def model_categories() -> list[str]:
     """Categories a model reads runs for (the screener, investigator and per-issue checks)."""
     return [k for k, c in CATEGORIES.items() if "model" in c["how"]]
@@ -143,6 +168,8 @@ DEFAULTS: dict[str, Any] = {
     "level": "standard",
     "monthly_cap_usd": 20.0,
     "guarded_tools": [],                 # tools that must not run without a person's approval
+    "message_tools": [],                 # tools that send a message to a person, on top of the auto-detected ones
+    "not_message_tools": [],             # auto-detected as sending, but don't
     "context_tokens_limit": 100_000,     # one model call reading more than this is flagged
     "tool_output_chars_limit": 50_000,   # one tool returning more than this is flagged
 }
@@ -178,7 +205,7 @@ def clean(patch: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
             v = [c for c in v if c in CATEGORIES]
         elif k == "level" and v not in LEVELS:
             continue
-        elif k == "guarded_tools":
+        elif k in ("guarded_tools", "message_tools", "not_message_tools"):
             v = sorted({str(t).strip() for t in v if str(t).strip()})[:200]
         elif k in ("monthly_cap_usd",):
             v = max(0.0, float(v))
@@ -228,10 +255,13 @@ async def feedback_for(trace_id: str) -> list[dict[str, Any]]:
 
 async def tools(project: str, days: int = 30) -> list[dict[str, Any]]:
     """The app's tools with how often each ran and paused for approval — to pick guarded tools from."""
-    return await query(f"""
+    rows = await query(f"""
         SELECT name, count() AS calls,
                countIf(attributes['imagent.interrupt'] != '') AS paused
         FROM {SPANS}
         WHERE project = {{p:String}} AND origin = '' AND kind = 'tool'
           AND start_time >= now() - INTERVAL {{d:UInt32}} DAY
         GROUP BY name ORDER BY calls DESC LIMIT 300""", {"p": project, "d": days})
+    for r in rows:
+        r["sends"] = sends_by_name(r["name"])  # auto-detected as sending a message to a person
+    return rows

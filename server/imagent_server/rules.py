@@ -15,6 +15,7 @@ can use them) and the signals are grouped into issues on the Issues board.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -183,6 +184,118 @@ async def secrets(project: str, days: int) -> tuple[list[dict], list[dict]]:
     return issues, signals
 
 
+# ── Leaked working notes ────────────────────────────────────────────────────
+# What a person receives (a final answer, or the text of a message a tool sends) that is really the
+# agent narrating its own work: "I now have all the data. Let me compose and send the report…".
+NARRATION = re.compile(
+    r"^\W*(?:(?:great|okay|ok|perfect|alright|good|now|so)[,!.]?\s+)*(?:"
+    r"i\s+(?:now\s+)?have\s+(?:all\s+)?(?:the\s+|everything\s+i\s+need|enough\s+)?(?:data|information|info|details|results|context|everything)"
+    r"|let\s+me\s+(?:now\s+|first\s+|also\s+)?(?:compose|draft|write|send|prepare|compile|put\s+together|check|look|fetch|get|call|use|search|gather|create|format|summari[sz]e|pull|query|find|review|analy[sz]e|start|begin|try)"
+    r"|i(?:'ll|\s+will|\s+am\s+going\s+to|'m\s+going\s+to)\s+(?:now\s+|first\s+)?(?:compose|draft|write|send|prepare|compile|call|use|fetch|check|search|gather|pull|query|look|start|begin|create)"
+    r"|now\s+(?:i(?:'ll|\s+will)|let\s+me|i\s+need\s+to)"
+    r"|next,?\s+i(?:'ll|\s+will|\s+need\s+to)"
+    r"|i\s+need\s+to\s+(?:call|use|check|fetch|look\s+up|gather|query|run)"
+    r"|(?:first|step\s*\d+)[,:]\s+i(?:'ll|\s+will)"
+    r")", re.I)
+TOOL_TALK = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+_tool\b|\btool\s+call|\bcall(?:ing)?\s+the\s+\w+\s+tool\b", re.I)
+_TEXT_KEYS = ("message", "text", "body", "content", "html", "msg", "caption", "markdown", "summary", "report", "note")
+# Cheap pre-filters for ClickHouse (the exact check is is_narration, in Python).
+_HAS_TOOL_CALLS = r'"tool_calls"\s*:\s*\[\s*\{'
+_NOTE_HINT = (r"(?i)(i (now )?have (all )?(the )?(data|information|details|everything)|let me (now |first )?"
+              r"(compose|draft|write|send|prepare|compile|put together|check|look|fetch|get|call|use|search|gather)"
+              r"|i('ll| will) (now )?(compose|draft|write|send|prepare|call|use|fetch)|_tool\b)")
+MAX_NOTE = 600  # longer than this and it's a real message that merely starts with a phrase like "Let me…"
+
+
+def message_text(raw: str) -> str:
+    """The words a person reads, from a send tool's arguments (or a model message)."""
+    raw = raw or ""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        from .screener import json_string_at
+        return json_string_at(raw, "content") if raw.lstrip().startswith("{") else raw
+    found: list[str] = []
+
+    def walk(v: Any, key: str = "") -> None:
+        if isinstance(v, dict):
+            for k, x in v.items():
+                walk(x, str(k).lower())
+        elif isinstance(v, list):
+            for x in v:
+                walk(x, key)
+        elif isinstance(v, str) and (key in _TEXT_KEYS or not key):
+            found.append(v)
+    walk(data)
+    return max(found, key=len) if found else ""
+
+
+def is_narration(text: str) -> bool:
+    t = (text or "").strip()
+    if not t or len(t) > MAX_NOTE:
+        return False
+    return bool(NARRATION.search(t[:300]) or TOOL_TALK.search(t))
+
+
+async def leaked_narration(project: str, days: int, cfg: dict[str, Any]) -> tuple[list[dict], list[dict]]:
+    """Final answers and sent messages that are the agent's working notes, not the content."""
+    from .engine import is_message_tool
+    params = {"p": project, "days": days}
+    sent = await query(f"""
+        SELECT trace_id, span_id, name, agent_name, thread_id, start_time, left(input, 20000) AS input
+        FROM {SPANS}
+        WHERE project = {{p:String}} AND origin = '' AND kind = 'tool' AND status = 'ok'
+          AND length(input) < 20000
+          AND match(lower(name), 'send|reply|notify|post|message|signal|mail|slack|sms|whatsapp|telegram|teams|broadcast')
+          AND start_time >= now() - INTERVAL {{days:UInt32}} DAY
+        ORDER BY start_time DESC LIMIT 5000""", params)
+    extra = [t for t in cfg.get("message_tools") or [] if t]
+    if extra:
+        sent += await query(f"""
+            SELECT trace_id, span_id, name, agent_name, thread_id, start_time, left(input, 20000) AS input
+            FROM {SPANS}
+            WHERE project = {{p:String}} AND origin = '' AND kind = 'tool' AND status = 'ok' AND name IN {{t:Array(String)}}
+              AND start_time >= now() - INTERVAL {{days:UInt32}} DAY
+            ORDER BY start_time DESC LIMIT 2000""", params | {"t": extra})
+    signals: list[dict] = []
+    seen: set[str] = set()
+    for r in sent:
+        if r["span_id"] in seen or not is_message_tool(r["name"], cfg):
+            continue
+        seen.add(r["span_id"])
+        text = message_text(r["input"])
+        if is_narration(text):
+            signals.append(_signal(project, r, "leaked_narration", "narration", "narr:" + r["name"], r["name"], len(text),
+                                   f"{r['name']} sent the agent's working notes to a person instead of the message: "
+                                   f"“{text.strip()[:200]}”"))
+    # Short model messages without tool calls that start like narration — kept only if it's the
+    # run's last model message (its answer), not a note before the next step.
+    notes = await query(f"""
+        SELECT trace_id, span_id, agent_name, thread_id, start_time, end_time, left(output, 4000) AS output
+        FROM {SPANS}
+        WHERE project = {{p:String}} AND origin = '' AND kind = 'llm' AND length(output) < 4000
+          AND NOT match(output, {{calls:String}})
+          AND match(output, {{note:String}})
+          AND start_time >= now() - INTERVAL {{days:UInt32}} DAY
+        ORDER BY start_time DESC LIMIT 2000""", params | {"calls": _HAS_TOOL_CALLS, "note": _NOTE_HINT})
+    if notes:
+        last = {r["trace_id"]: r["span_id"] for r in await query(f"""
+            SELECT trace_id, argMax(span_id, end_time) AS span_id FROM {SPANS}
+            WHERE trace_id IN {{t:Array(String)}} AND kind = 'llm' GROUP BY trace_id""",
+                                                              {"t": list({n["trace_id"] for n in notes})})}
+        for r in notes:
+            if last.get(r["trace_id"]) != r["span_id"]:
+                continue
+            text = message_text(r["output"])
+            if is_narration(text):
+                signals.append(_signal(project, r, "leaked_narration", "narration", "narr:final answer", "final answer",
+                                       len(text), f"the run's answer is the agent's working notes, not an answer: “{text.strip()[:200]}”"))
+    issues = _group(project, signals, title=lambda key, loc, worst, rule: (
+        "Final answers are the agent's working notes, not the answer" if loc == "final answer"
+        else f"{loc} sends the agent's working notes instead of the message"))
+    return issues, signals
+
+
 def find_bypasses(ran: list[dict], approvals: list[dict]) -> list[dict]:
     """Guarded tool calls that did the action with no approval before them (same run, or earlier
     in the same conversation)."""
@@ -261,6 +374,10 @@ async def detect(project: str, days: int, cfg: dict[str, Any]) -> tuple[list[dic
         i, s = await secrets(project, days)
         issues += i
         signals += s
+    if "leaked_narration" in cats:
+        i, s = await leaked_narration(project, days, cfg)
+        issues += i
+        signals += s
     if "guardrail_bypass" in cats:
         i, s, st = await guardrail_bypass(project, days, cfg)
         issues += i
@@ -288,6 +405,9 @@ def severity(issue: dict[str, Any]) -> str | None:
     """Severity for engine categories (None: an error/loop issue)."""
     if issue["kind"] == "guardrail_bypass" or (issue["kind"] == "pii_leak" and issue.get("location", "").startswith("secret")):
         return "high"  # an unapproved action or a leaked secret is serious however often it happens
+    if issue["kind"] == "leaked_narration":
+        # a person got notes instead of a message: serious when it went out as a message
+        return "high" if issue.get("location") != "final answer" else "medium" if issue["runs"] >= 2 else "low"
     if issue["kind"] == "response_truncation":
         return "medium" if issue["runs"] >= 3 else "low"
     from .engine import model_categories

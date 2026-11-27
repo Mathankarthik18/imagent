@@ -460,17 +460,18 @@ export const ISSUE_STATUS: Record<IssueStatus, string> = {
 export interface Evidence { trace_id: string; span_id: string; rule: string; detail: string; note: string; start_time: string }
 export type IssueKind = "error" | "loop" | "hallucination" | "task_evasion" | "response_truncation" | "missing_capability"
   | "feature_gap" | "silent_tool_error" | "wrong_tool" | "incorrect_tool_args" | "failed_error_recovery" | "agent_looping"
-  | "flawed_plan" | "prompt_drift" | "guardrail_bypass" | "pii_leak" | "context_explosion";
+  | "flawed_plan" | "prompt_drift" | "guardrail_bypass" | "pii_leak" | "context_explosion" | "leaked_narration";
 export const ISSUE_KIND: Record<IssueKind, string> = {
   error: "Error", loop: "Agent looping", hallucination: "Hallucination", task_evasion: "Task evasion",
   response_truncation: "Response truncation", missing_capability: "Missing capability awareness", feature_gap: "Feature gap",
   silent_tool_error: "Silent tool error", wrong_tool: "Wrong tool", incorrect_tool_args: "Incorrect tool args",
   failed_error_recovery: "Failed error recovery", agent_looping: "Agent looping", flawed_plan: "Flawed plan",
   prompt_drift: "System prompt drift", guardrail_bypass: "Guardrail bypass", pii_leak: "PII leak", context_explosion: "Context explosion",
+  leaked_narration: "Leaked working notes",
 };
 /** Issue kinds a model files (and that get a per-issue check). */
 export const AI_ISSUE_KINDS: IssueKind[] = ["hallucination", "task_evasion", "missing_capability", "feature_gap", "silent_tool_error",
-  "wrong_tool", "incorrect_tool_args", "failed_error_recovery", "agent_looping", "flawed_plan", "prompt_drift", "guardrail_bypass", "pii_leak"];
+  "wrong_tool", "incorrect_tool_args", "failed_error_recovery", "agent_looping", "flawed_plan", "prompt_drift", "guardrail_bypass", "pii_leak", "leaked_narration"];
 export interface Signal { span_id: string; category: IssueKind; rule: string; issue_id: string; location: string; value: number; detail: string }
 export type Severity = "high" | "medium" | "low";
 export interface Issue {
@@ -503,6 +504,7 @@ export interface Diagnosis {
 export interface EngineSettings {
   enabled: boolean; categories: string[]; screener_model: string; investigator_model: string;
   level: "reduced" | "standard" | "expanded"; monthly_cap_usd: number; guarded_tools: string[];
+  message_tools: string[]; not_message_tools: string[];
   context_tokens_limit: number; tool_output_chars_limit: number;
 }
 export interface EngineCategory { label: string; group: string; how: "model" | "rule" | "rule+model"; definition: string }

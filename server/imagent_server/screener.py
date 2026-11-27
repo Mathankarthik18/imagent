@@ -26,7 +26,7 @@ from typing import Any
 
 from . import judge, rules
 from .db import DB, SPANS, get_client, query
-from .engine import CATEGORIES, FEEDBACK, LEVELS, model_categories
+from .engine import CATEGORIES, FEEDBACK, LEVELS, is_message_tool, model_categories
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def last_text(steps: list[dict[str, Any]], agent: str) -> str:
 
 
 def outline(run: dict[str, Any], steps: list[dict[str, Any]], findings: list[dict[str, Any]],
-            feedback: list[dict[str, Any]]) -> tuple[str, list[str]]:
+            feedback: list[dict[str, Any]], es: dict[str, Any] | None = None) -> tuple[str, list[str]]:
     """A run as a short numbered outline, and the span id behind each step number."""
     ids: list[str] = []
     lines = [f"request: {_clip(user_request(run.get('input_head') or ''), 400) or '(not captured)'}"]
@@ -176,7 +176,11 @@ def outline(run: dict[str, Any], steps: list[dict[str, Any]], findings: list[dic
         n = idx + 1
         err = f" ERROR: {_clip(s['status_message'], 160)}" if s["status"] == "error" else ""
         paused = " (paused for approval)" if s.get("interrupt") else ""
-        if s["kind"] == "tool":
+        if s["kind"] == "tool" and es is not None and is_message_tool(s["name"], es):
+            # what a person reads — the screener must see the words, not just that a message went out
+            msg = rules.message_text(s.get("input_head") or "")
+            lines.append(f"[{n}] tool {s['name']} SENDS TO A PERSON: “{_clip(msg, 500)}”{err}{paused}")
+        elif s["kind"] == "tool":
             out = s.get("output_head") or ""
             if out.lstrip().startswith('{"role"'):  # a tool message: show what the tool returned, unescaped
                 out = json_string_at(out, "content") or out
@@ -223,7 +227,7 @@ async def candidates(project: str, days: int, limit: int) -> list[dict[str, Any]
 async def _steps(trace_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
     rows = await query(f"""
         SELECT trace_id, span_id, kind, name, agent_name, status, left(status_message, 300) AS status_message,
-               input_tokens, left(input, 300) AS input_head, left(output, 1500) AS output_head,
+               input_tokens, if(kind = 'tool' AND match(lower(name), 'send|reply|notify|post|message|signal|mail|slack|sms|whatsapp|telegram|teams|broadcast'), left(input, 1500), left(input, 300)) AS input_head, left(output, 1500) AS output_head,
                length(output) + toUInt64OrZero(extract(output, 'truncated (\\\\d+) chars')) AS output_len,
                attributes['imagent.interrupt'] != '' AS interrupt
         FROM {SPANS}
@@ -388,7 +392,7 @@ async def screen(project: str, proj: dict[str, Any], es: dict[str, Any], days: i
             texts, spans = [], {}
             for sid, r in short.items():
                 text, step_ids = outline(r, steps.get(r["trace_id"], []), findings.get(r["trace_id"], []),
-                                         feedback.get(r["trace_id"], []))
+                                         feedback.get(r["trace_id"], []), es)
                 texts.append((sid, text))
                 spans[sid] = step_ids
             try:
