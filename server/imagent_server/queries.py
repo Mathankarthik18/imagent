@@ -51,9 +51,16 @@ def _trace_match(f: Filters, params: dict[str, Any]) -> list[str]:
     conds: list[str] = []
     if f.q:
         params["q"] = f.q
-        conds.append("(positionCaseInsensitive(name, {q:String}) > 0 OR positionCaseInsensitive(input, {q:String}) > 0"
-                     " OR positionCaseInsensitive(output, {q:String}) > 0 OR trace_id = {q:String}"
-                     " OR thread_id = {q:String})")
+        # Only the text that is distinct: each run's request, tool inputs/outputs and what models
+        # wrote. Model-call inputs (the whole conversation, again, on every call) and agent/graph
+        # state outputs repeat it and are most of the bytes, so scanning them made a month's search
+        # run out of memory or time on a busy project.
+        conds.append("(positionCaseInsensitive(name, {q:String}) > 0 OR trace_id = {q:String} OR thread_id = {q:String}"
+                     " OR positionCaseInsensitive(status_message, {q:String}) > 0"
+                     " OR (is_root = 1 AND positionCaseInsensitive(input, {q:String}) > 0)"
+                     " OR (kind = 'llm' AND positionCaseInsensitive(output, {q:String}) > 0)"
+                     " OR (kind NOT IN ('llm', 'agent', 'chain', 'node') AND (positionCaseInsensitive(input, {q:String}) > 0"
+                     " OR positionCaseInsensitive(output, {q:String}) > 0)))")
     if f.model:
         params["model"] = f.model
         conds.append("model = {model:String}")
@@ -208,7 +215,7 @@ async def list_traces(f: Filters, limit: int = 50, offset: int = 0, order: str =
         ORDER BY start_time {direction}
         LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}
     """
-    rows = (await query(sql, params))[: limit + 1]
+    rows = (await query(sql, params, SEARCH_SETTINGS if f.q else None))[: limit + 1]
     texts = await _root_texts([(r["trace_id"], r["root_span_id"]) for r in rows[:limit]], preview_chars)
     for r in rows:
         r.update(texts.get((r["trace_id"], r.pop("root_span_id")), _NO_TEXT))
@@ -265,7 +272,7 @@ async def thread_groups(f: Filters, *, sort: str = "recent", include_unthreaded:
         ORDER BY {_THREAD_SORTS.get(sort, _THREAD_SORTS["recent"])}
         LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}
     """
-    rows = await query(sql, params)
+    rows = await query(sql, params, SEARCH_SETTINGS if f.q else None)
     shown = rows[:limit]
     texts = await _root_texts([tuple(r[k]) for r in shown for k in ("first_root", "last_root")], 200)
     for r in rows:
@@ -489,3 +496,8 @@ async def app_names(project: str, limit: int = 6) -> list[str]:
           AND start_time >= now() - INTERVAL 30 DAY
         GROUP BY name ORDER BY n DESC LIMIT 40""", {"p": project})
     return [r["name"] for r in rows if r["name"] not in _FRAMEWORK_NAMES and len(r["name"]) >= 6][:limit]
+
+
+# A text search reads payloads; cap it so a slow one fails fast with advice instead of hanging
+# until the proxy cuts it (an empty error in the UI).
+SEARCH_SETTINGS = {"max_execution_time": 30}

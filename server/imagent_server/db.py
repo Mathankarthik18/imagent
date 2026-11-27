@@ -169,7 +169,7 @@ async def insert_running(rows: list[list]) -> None:
         await client.insert(RUNNING, rows, column_names=RUNNING_COLUMNS)
 
 
-async def query(sql: str, params: dict | None = None) -> list[dict]:
+async def query(sql: str, params: dict | None = None, settings: dict | None = None) -> list[dict]:
     client = await get_client()
-    result = await client.query(sql, parameters=params or {}, settings=_QUERY_SETTINGS)
+    result = await client.query(sql, parameters=params or {}, settings={**_QUERY_SETTINGS, **(settings or {})})
     return list(result.named_results())

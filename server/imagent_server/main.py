@@ -238,13 +238,29 @@ async def api_facets(f: F) -> dict:
 @app.get("/api/traces", dependencies=read)
 async def api_traces(f: F, limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0),
                      order: str = Query("desc", pattern="^(asc|desc)$")) -> dict:
-    return await queries.list_traces(f, limit, offset, order)
+    try:
+        return await queries.list_traces(f, limit, offset, order)
+    except Exception as exc:  # noqa: BLE001 — never a bare 500
+        raise _search_failed(exc, f) from exc
+
+
+def _search_failed(exc: Exception, f) -> HTTPException:
+    """A list query that failed — a text search over a long window is the usual cause; say what to do."""
+    msg = str(exc)
+    if f.q and ("TIMEOUT_EXCEEDED" in msg or "Code: 159" in msg or "MEMORY_LIMIT_EXCEEDED" in msg or "Code: 241" in msg):
+        return HTTPException(status_code=504, detail="Searching this much history took too long. Pick a shorter time "
+                                                     "range, or add an agent, user or status filter, and search again.")
+    logger.exception("trace list failed")
+    return HTTPException(status_code=500, detail=f"Couldn't list runs: {diagnose.scan_error(exc)}")
 
 
 @app.get("/api/traces/by-thread", dependencies=read)
 async def api_traces_by_thread(f: F, sort: str = "recent", limit: int = Query(50, ge=1, le=500),
                                offset: int = Query(0, ge=0)) -> dict:
-    return await queries.thread_groups(f, sort=sort, include_unthreaded=True, limit=limit, offset=offset)
+    try:
+        return await queries.thread_groups(f, sort=sort, include_unthreaded=True, limit=limit, offset=offset)
+    except Exception as exc:  # noqa: BLE001 — never a bare 500
+        raise _search_failed(exc, f) from exc
 
 
 @app.get("/api/traces/{trace_id}", dependencies=read)

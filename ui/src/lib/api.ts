@@ -224,6 +224,14 @@ export function setReadKey(key: string) {
   }
 }
 
+/** A readable reason for a failed response that has no JSON detail (HTTP/2 has no status text). */
+function statusMessage(res: Response): string {
+  if (res.status === 504 || res.status === 524) return `The server took too long to answer (HTTP ${res.status}) — try a shorter time range or fewer filters`;
+  if (res.status === 502 || res.status === 503 || res.status === 520 || res.status === 521)
+    return `imagent's server isn't reachable right now (HTTP ${res.status}) — it may be restarting`;
+  return res.statusText || `HTTP ${res.status}`;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -240,7 +248,7 @@ export async function api<T>(path: string, params: Record<string, string | numbe
     headers: key ? { "x-imagent-key": key } : {},
   });
   if (!res.ok) {
-    let detail = res.statusText;
+    let detail = statusMessage(res);
     try {
       detail = (await res.json()).detail ?? detail;
     } catch {
@@ -387,7 +395,7 @@ export async function apiText(path: string): Promise<string> {
   const key = getReadKey();
   const res = await fetch(path, { headers: key ? { "x-imagent-key": key } : {} });
   if (!res.ok) {
-    let detail = res.statusText;
+    let detail = statusMessage(res);
     try {
       detail = (await res.json()).detail ?? detail;
     } catch {
@@ -406,7 +414,7 @@ export async function apiPost<T>(path: string, body: unknown, method: "POST" | "
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    let detail = res.statusText;
+    let detail = statusMessage(res);
     try {
       const j = await res.json();
       detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
