@@ -51,16 +51,11 @@ def _trace_match(f: Filters, params: dict[str, Any]) -> list[str]:
     conds: list[str] = []
     if f.q:
         params["q"] = f.q
-        # Only the text that is distinct: each run's request, tool inputs/outputs and what models
-        # wrote. Model-call inputs (the whole conversation, again, on every call) and agent/graph
-        # state outputs repeat it and are most of the bytes, so scanning them made a month's search
-        # run out of memory or time on a busy project.
-        conds.append("(positionCaseInsensitive(name, {q:String}) > 0 OR trace_id = {q:String} OR thread_id = {q:String}"
-                     " OR positionCaseInsensitive(status_message, {q:String}) > 0"
-                     " OR (is_root = 1 AND positionCaseInsensitive(input, {q:String}) > 0)"
-                     " OR (kind = 'llm' AND positionCaseInsensitive(output, {q:String}) > 0)"
-                     " OR (kind NOT IN ('llm', 'agent', 'chain', 'node') AND (positionCaseInsensitive(input, {q:String}) > 0"
-                     " OR positionCaseInsensitive(output, {q:String}) > 0)))")
+        # search_text holds each step's distinct words (db.SEARCH_TEXT_EXPR) — a few KB instead of
+        # every payload, so a month's search reads a fraction of the data.
+        conds.append("(positionCaseInsensitive(search_text, {q:String}) > 0"
+                     " OR positionCaseInsensitive(name, {q:String}) > 0 OR trace_id = {q:String} OR thread_id = {q:String}"
+                     " OR positionCaseInsensitive(status_message, {q:String}) > 0)")
     if f.model:
         params["model"] = f.model
         conds.append("model = {model:String}")

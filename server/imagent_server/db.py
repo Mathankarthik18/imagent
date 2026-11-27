@@ -142,7 +142,35 @@ async def ensure_schema() -> None:
     client = await get_client()
     for ddl in [*_SCHEMA, *_MIGRATIONS, PRICES_DDL, *EXPERIMENT_DDL, *BLUEPRINT_DDL, *PROJECT_DDL, *DIAGNOSE_DDL, *ENGINE_DDL, *RULES_DDL, *SCREENER_DDL, *LEARNING_DDL, *CHECKS_DDL, *FIX_CHAT_DDL]:
         await client.command(ddl)
+    await _ensure_search_text()
     logger.info("ClickHouse schema ready (%s)", SPANS)
+
+
+# What a text search reads: the words that are distinct in each step, a few KB at most, instead of
+# every payload (a model call's input re-sends the whole conversation; agent state outputs repeat it).
+# Root spans: the end of the request and of the output (the latest user message, the final answer);
+# model calls: what the model wrote; tools and other steps: the start of input and output.
+SEARCH_TEXT_EXPR = (
+    "multiIf("
+    "kind = 'llm', substring(output, 1, 4000), "
+    "is_root = 1, concat(right(input, 3000), '\\n', right(output, 3000)), "
+    "kind IN ('agent', 'chain', 'node'), '', "
+    "concat(substring(input, 1, 2000), '\\n', substring(output, 1, 3000)))"
+)
+
+
+async def _ensure_search_text() -> None:
+    """Add the search column (filled on insert from now on) and, the first time, backfill the runs
+    already stored — a background mutation ClickHouse works through part by part."""
+    rows = await query("SELECT count() AS n FROM system.columns WHERE database = {db:String} AND table = 'spans' "
+                       "AND name = 'search_text'", {"db": DB})
+    if rows and rows[0]["n"]:
+        return
+    client = await get_client()
+    await client.command(f"ALTER TABLE {SPANS} ADD COLUMN IF NOT EXISTS search_text String "
+                         f"MATERIALIZED {SEARCH_TEXT_EXPR} CODEC(ZSTD(3))")
+    await client.command(f"ALTER TABLE {SPANS} MATERIALIZE COLUMN search_text", settings={"mutations_sync": 0})
+    logger.info("search_text column added; backfilling stored runs in the background")
 
 
 async def close() -> None:
