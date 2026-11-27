@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { AgentHandoff, AgentPointer, AgentViewPage } from "../components/AgentView";
 import { CATEGORY, CreateFix, DiagnosisPanel, DiffView, FixChat, splitLead } from "../components/Diagnosis";
 import { Icon } from "../components/icons";
 import { Markdown } from "../components/Markdown";
@@ -18,6 +19,7 @@ const label = "text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-
 
 export function IssueDetail() {
   const { issueId = "" } = useParams();
+  const [search] = useSearchParams();
   const qc = useQueryClient();
   const key = ["issue", issueId];
   const q = useQuery({
@@ -31,6 +33,7 @@ export function IssueDetail() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: key }); qc.invalidateQueries({ queryKey: ["issues"] }); },
   });
 
+  if (search.get("view") === "agent") return <AgentViewPage kind="issue" id={issueId} />;
   if (q.isError) return <ErrorBox error={q.error} />;
   if (!q.data) return <Spinner />;
   const i = q.data;
@@ -39,6 +42,7 @@ export function IssueDetail() {
 
   return (
     <div className="mx-auto max-w-[1480px]">
+      <AgentPointer kind="issue" id={issueId} />
       <Header i={i} busy={setStatus.isPending} set={setStatus.mutate} />
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_420px]">
@@ -111,6 +115,7 @@ function Header({ i, busy, set }: { i: IssueData; busy: boolean; set: (b: { stat
         {i.status_reason && <p className="mt-2 text-[12.5px] text-ink-3">{ISSUE_STATUS[i.status]}: {i.status_reason}</p>}
       </div>
       <div className="flex items-center gap-2">
+        <AgentHandoff kind="issue" id={i.id} />
         {active ? (
           <>
             {i.status === "open"

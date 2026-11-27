@@ -379,6 +379,22 @@ export interface ExperimentSummary {
   results?: { name: string; verdicts: Record<Verdict, number>; total: number; avg_cost: number | null; better?: Record<Better, number> }[];
 }
 
+/** A text endpoint (e.g. the agent view's Markdown). */
+export async function apiText(path: string): Promise<string> {
+  const key = getReadKey();
+  const res = await fetch(path, { headers: key ? { "x-imagent-key": key } : {} });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      detail = (await res.json()).detail ?? detail;
+    } catch {
+      /* not json */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return res.text();
+}
+
 export async function apiPost<T>(path: string, body: unknown, method: "POST" | "PATCH" = "POST"): Promise<T> {
   const key = getReadKey();
   const res = await fetch(path, {

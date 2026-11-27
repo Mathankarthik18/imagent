@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AgentHandoff } from "./AgentView";
 import { useCallback, useRef, useState } from "react";
 import { api, apiPost, ISSUE_KIND, type Feedback, type Signal, type Span } from "../lib/api";
 import { fmtCost, fmtDuration, fmtNum, parseTime } from "../lib/format";
@@ -86,6 +87,7 @@ export function TraceView({ traceId, selected, onSelect, splitId = "trace", heig
         {!player.on && stats.llm > 0 && <TryModel traceId={traceId} root={stats.root} span={span} spans={spans} />}
         {!player.on && <DiagnoseRun traceId={traceId} failed={stats.failed > 0} />}
         {!player.on && <FlagRun traceId={traceId} />}
+        {!player.on && <AgentHandoff kind="trace" id={traceId} />}
         {!player.on && <RunSignals traceId={traceId} onSelect={onSelect} />}
         <span><span className="text-ink">{fmtDuration(stats.duration)}</span> {stats.running ? "so far" : "total"}</span>
         <span><span className="text-ink">{spans.length}</span> spans</span>

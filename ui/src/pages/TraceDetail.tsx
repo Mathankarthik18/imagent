@@ -1,4 +1,5 @@
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { AgentPointer, AgentViewPage } from "../components/AgentView";
 import { KindIcon } from "../components/icons";
 import { Time } from "../components/Time";
 import { traceStats, TraceView, useTrace } from "../components/TraceView";
@@ -10,6 +11,7 @@ export function TraceDetail() {
   const [params, setParams] = useSearchParams();
   const q = useTrace(traceId);
   const root = q.data?.spans.length ? traceStats(q.data.spans).root : null;
+  if (params.get("view") === "agent") return <AgentViewPage kind="trace" id={traceId} />;
 
   const select = (id: string) => {
     const next = new URLSearchParams(params);
@@ -19,6 +21,7 @@ export function TraceDetail() {
 
   return (
     <div>
+      <AgentPointer kind="trace" id={traceId} />
       <nav className="mb-2 flex items-center gap-1.5 text-[12.5px] text-ink-3">
         <Link to={pp("/traces")} className="hover:text-ink">Traces</Link>
         <span>/</span>

@@ -12,12 +12,12 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
 
-from . import blueprints, checks, fix_chat, compare, db, diagnose, engine, experiments, github, investigator, learning, rules, screener, judge, live, price_sync, projects, queries, stitch
+from . import agent_view, blueprints, checks, fix_chat, compare, db, diagnose, engine, experiments, github, investigator, learning, rules, screener, judge, live, price_sync, projects, queries, stitch
 from . import pricing
 from .config import settings
 from .ingest import decode_request, split_rows
@@ -683,6 +683,34 @@ async def api_trace_chat_post(trace_id: str, body: ChatIn) -> dict:
 @app.post("/api/traces/{trace_id}/chat/{message_id}/adopt", dependencies=read)
 async def api_trace_chat_adopt(trace_id: str, message_id: str) -> dict:
     return await _chat_adopt(f"trace:{trace_id}", message_id)
+
+
+# ── Agent view: a run or an issue as one text document for coding agents ──
+
+def _origin(request: Request, base: str) -> str:
+    if base.startswith(("http://", "https://")):
+        return base
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}"
+
+
+@app.get("/api/traces/{trace_id}/agent-view", dependencies=read, response_class=PlainTextResponse)
+async def api_trace_agent_view(trace_id: str, request: Request, base: str = "") -> PlainTextResponse:
+    """The whole run as Markdown: request, answer, failures in full, every step and tool call, its issues."""
+    text = await agent_view.trace_text(trace_id, _origin(request, base))
+    if text is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
+
+
+@app.get("/api/issues/{issue_id}/agent-view", dependencies=read, response_class=PlainTextResponse)
+async def api_issue_agent_view(issue_id: str, request: Request, base: str = "") -> PlainTextResponse:
+    """The issue, its diagnosis and fix discussion, its runs, and the latest run in full — as Markdown."""
+    text = await agent_view.issue_text(issue_id, _origin(request, base))
+    if text is None:
+        raise HTTPException(status_code=404, detail="issue not found")
+    return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
 
 
 @app.get("/api/traces/{trace_id}/diagnosis", dependencies=read)
