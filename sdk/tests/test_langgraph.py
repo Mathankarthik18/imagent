@@ -266,3 +266,13 @@ def test_user_id_from_run_metadata(spans):
     assert all_spans
     for s in all_spans:
         assert s.attributes.get(sc.USER_ID) == "u-meta", s.name
+
+
+def test_user_name_from_run_metadata_is_shown_as_the_user(spans):
+    # An app can send a readable name next to its stable id: imagent shows the name,
+    # the id stays in the run's metadata (replays and other tools key on it).
+    build_graph().invoke({"messages": [HumanMessage("How fast is ATLAS?")]},
+                         config={"configurable": {"thread_id": "t-n"},
+                                 "metadata": {"user_id": "user_019f", "user_name": "Mathan Karthik"}})
+    for s in spans.all():
+        assert s.attributes.get(sc.USER_ID) == "Mathan Karthik", s.name

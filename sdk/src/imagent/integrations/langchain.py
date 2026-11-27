@@ -225,7 +225,9 @@ class ImagentCallbackHandler(BaseCallbackHandler):
                 kind = "agent"
         thread_id = metadata.get("thread_id") or metadata.get("session_id") or (parent.thread_id if parent else None)
         thread_id = str(thread_id) if thread_id else None
-        user_id = metadata.get("user_id") or (parent.user_id if parent else None)
+        # The run's user as people should see it: an app can send a readable user_name next to
+        # its stable user_id (which stays in metadata for replays and other tools).
+        user_id = metadata.get("user_name") or metadata.get("user_id") or (parent.user_id if parent else None)
         user_id = str(user_id) if user_id else None
         agent_name = parent.agent_name if parent else None
         if kind == "agent":
