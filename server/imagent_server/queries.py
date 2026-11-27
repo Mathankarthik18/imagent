@@ -399,6 +399,22 @@ async def stats(f: Filters) -> dict[str, Any]:
         FROM {SPANS} WHERE {where} AND kind = 'tool'
         GROUP BY name ORDER BY calls DESC LIMIT 50
     """
+    # Who the runs were for. user_id is '' for automatic work (apps like Bosun leave it empty when
+    # nobody asked) and for direct calls outside an agent run. Metric columns only — no payloads.
+    by_user_sql = f"""
+        SELECT user_id AS user, uniqExactIf(trace_id, is_root = 1) AS runs,
+               uniqExactIf(thread_id, is_root = 1 AND thread_id != '') AS conversations,
+               sum(input_tokens + output_tokens) AS tokens, sum(cost_usd) AS cost_usd,
+               max(start_time) AS last_active
+        FROM {SPANS} WHERE {where}
+        GROUP BY user ORDER BY sum(cost_usd) DESC, runs DESC LIMIT 51
+    """
+    user_series_sql = f"""
+        SELECT user_id AS user, toStartOfInterval(start_time, toIntervalSecond({{bucket:UInt32}})) AS t,
+               countIf(is_root = 1) AS runs
+        FROM {SPANS} WHERE {where} AND is_root = 1
+        GROUP BY user, t ORDER BY t
+    """
     errors_sql = f"""
         SELECT name, kind, substring(status_message, 1, 300) AS message, count() AS count,
                max(start_time) AS last_seen, any(trace_id) AS sample_trace_id
@@ -413,6 +429,8 @@ async def stats(f: Filters) -> dict[str, Any]:
         "by_model": await query(by_model_sql, params),
         "by_agent": await query(by_agent_sql, params),
         "by_tool": await query(by_tool_sql, params),
+        "by_user": await query(by_user_sql, params),
+        "user_series": await query(user_series_sql, params),
         "errors": await query(errors_sql, params),
     }
 

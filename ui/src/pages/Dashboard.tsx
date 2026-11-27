@@ -90,6 +90,8 @@ export function Dashboard() {
         </Chart>
       </div>
 
+      <People stats={q.data} onPick={(u) => navigate(pp(`/traces?user_id=${encodeURIComponent(u)}`))} />
+
       <div className="grid gap-x-10 gap-y-8 xl:grid-cols-2">
         <Section title="Models">
           <Table head={["Model", "Calls", "In / out", "Cache", "p95", "Failed", "Cost"]}
@@ -192,5 +194,72 @@ function Table({ head, rows, onRow }: { head: string[]; rows: ReactNode[][]; onR
         </tbody>
       </table>
     </div>
+  );
+}
+
+
+/** Who the work was for: asked by people vs automatic, then usage, cost and activity per person. */
+function People({ stats, onPick }: { stats: Stats; onPick: (user: string) => void }) {
+  const rows = stats.by_user ?? [];
+  if (!rows.length || !rows.some((r) => r.user)) return null; // the app doesn't send users
+  const people = rows.filter((r) => r.user);
+  const auto = rows.find((r) => !r.user);
+  const sum = (k: "runs" | "cost_usd") => rows.reduce((a, r) => a + (r[k] || 0), 0);
+  const share = (k: "runs" | "cost_usd") => { const all = sum(k); return all ? people.reduce((a, r) => a + r[k], 0) / all : 0; };
+  // runs per bucket per person, on the same timeline as the charts
+  const times = stats.series.map((p) => p.t);
+  const byUser = new Map<string, Map<string, number>>();
+  for (const p of stats.user_series ?? []) {
+    if (!byUser.has(p.user)) byUser.set(p.user, new Map());
+    byUser.get(p.user)!.set(p.t, p.runs);
+  }
+  const spark = (user: string) => times.map((t) => byUser.get(user)?.get(t) ?? 0);
+  const ordered = [...people, ...(auto ? [auto] : [])];
+  return (
+    <Section title="People" actions={<span className="text-[12px] text-ink-3">who the runs were for</span>}>
+      <div className="mb-4 grid gap-4 sm:grid-cols-2">
+        <Split label="Runs" people={share("runs")} detail={`${fmtNum(people.reduce((a, r) => a + r.runs, 0))} asked by people · ${fmtNum(auto?.runs ?? 0)} automatic`} />
+        <Split label="Cost" people={share("cost_usd")} detail={`${fmtCost(people.reduce((a, r) => a + r.cost_usd, 0))} people · ${fmtCost(auto?.cost_usd ?? 0)} automatic`} />
+      </div>
+      <Table head={["Person", "Runs", "Conversations", "Tokens", "Cost", "Per run", "Activity", "Last active"]}
+        onRow={(i) => ordered[i].user && onPick(ordered[i].user)}
+        rows={ordered.map((r) => [
+          r.user ? <span key="u" className="text-ink">{r.user}</span>
+            : <span key="u" className="text-ink-3" title="Runs nobody asked for (e.g. email processing), and calls made outside an agent run">Automatic</span>,
+          fmtNum(r.runs), r.conversations ? fmtNum(r.conversations) : "—", fmtNum(r.tokens),
+          <span className="text-ink" key="c">{fmtCost(r.cost_usd)}</span>,
+          r.runs ? fmtCost(r.cost_usd / r.runs) : "—",
+          <Sparkline key="s" values={spark(r.user)} muted={!r.user} />,
+          <Time key="t" value={r.last_active} />,
+        ])} />
+    </Section>
+  );
+}
+
+function Split({ label, people, detail }: { label: string; people: number; detail: string }) {
+  return (
+    <div className="rounded-lg border border-line px-4 py-3">
+      <div className="mb-2 flex items-baseline justify-between gap-3 text-[12.5px]">
+        <span className="font-medium text-ink">{label}</span>
+        <span className="text-ink-3"><b className="font-medium text-ink">{fmtPct(people)}</b> people · {fmtPct(1 - people)} automatic</span>
+      </div>
+      <div className="flex h-2 overflow-hidden rounded-full bg-subtle">
+        <div className="bg-[var(--series-1)]" style={{ width: `${people * 100}%` }} />
+        <div className="bg-ink-3/30" style={{ width: `${(1 - people) * 100}%` }} />
+      </div>
+      <div className="mt-1.5 text-[11.5px] text-ink-3">{detail}</div>
+    </div>
+  );
+}
+
+function Sparkline({ values, muted }: { values: number[]; muted?: boolean }) {
+  const max = Math.max(1, ...values);
+  const w = 96, h = 20;
+  const step = values.length > 1 ? w / (values.length - 1) : w;
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - 1 - (v / max) * (h - 3)).toFixed(1)}`).join(" ");
+  return (
+    <svg width={w} height={h} className="ml-auto block" aria-label="runs over time">
+      <polyline points={pts} fill="none" stroke={muted ? "var(--text-3)" : "var(--series-1)"} strokeWidth={1.5} strokeLinejoin="round" />
+    </svg>
   );
 }

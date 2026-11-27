@@ -189,6 +189,9 @@ export interface Stats {
   by_agent: { agent: string; traces: number; llm_calls: number; tool_calls: number; cost_usd: number;
     tokens: number; errors: number; p95_ms: number }[];
   by_tool: { name: string; calls: number; errors: number; avg_ms: number; p95_ms: number }[];
+  /** user "" = automatic work, or calls made outside an agent run */
+  by_user?: { user: string; runs: number; conversations: number; tokens: number; cost_usd: number; last_active: string }[];
+  user_series?: { user: string; t: string; runs: number }[];
   errors: { name: string; kind: string; message: string; count: number; last_seen: string; sample_trace_id: string }[];
 }
 
